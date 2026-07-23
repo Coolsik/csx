@@ -1,0 +1,20 @@
+{
+  "name": "csx-local",
+  "interface": {
+    "displayName": "csx Local"
+  },
+  "plugins": [
+    {
+      "name": "csx",
+      "source": {
+        "source": "local",
+        "path": "./plugins/csx"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
