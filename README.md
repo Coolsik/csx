@@ -93,12 +93,14 @@ $csx-spec clarify this feature idea
 $csx-plan create an implementation plan
 $csx-plan-pro plan this architecture-sensitive migration
 $csx-start-goal execute the accepted plan
+$csx-deslop clean this bounded change without changing behavior
 $csx-code-review review the current changes
 ```
 
 The hook also recognizes prompts beginning with `csx analyze`, `csx spec`,
-`csx plan`, `csx plan-pro`, `csx start-goal`, or `csx code-review`. Ordinary
-natural-language prompts are not routed.
+`csx plan`, `csx plan-pro`, `csx start-goal`, `csx deslop`, or
+`csx code-review`. Ordinary natural-language prompts are not routed. Skills,
+including `csx-deslop`, use explicit invocation rather than implicit routing.
 
 Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
 architect, critic, executor, verifier, and code-reviewer.
@@ -109,6 +111,15 @@ requires Architect `CLEAR` plus Critic `APPROVED` for the same draft version.
 Both skills record verification evidence and finish with an explicit choice to
 refine, stop, or authorize execution through `csx-start-goal`; BLOCKED plans
 cannot enter execution.
+
+`csx-start-goal` creates one aggregate Codex goal for the accepted plan and
+tracks bounded `G001...Gnnn` execution goals in `.csx/goals/`. Non-trivial
+implementation is followed by scoped `csx-deslop` cleanup and the same
+verification. When all execution goals are ready, the complete cumulative diff
+must pass `csx-code-review`; failed findings return affected goals to rework and
+any later code change invalidates the earlier approval. The standalone
+`csx-verifier` agent remains installed for independent use, but it is not a
+completion dependency of `csx-start-goal`.
 
 ## Uninstall
 

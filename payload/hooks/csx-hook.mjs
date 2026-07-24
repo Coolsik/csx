@@ -6,6 +6,7 @@ const SKILL_HINTS = {
   plan: "concise implementation plan with verification and risk checks",
   "plan-pro": "higher-rigor plan with bounded architect and critic review",
   "start-goal": "durable task execution with success criteria and evidence",
+  deslop: "behavior-preserving cleanup of a bounded change followed by the same verification",
   "code-review": "severity-first diff review with independent reviewer lanes for substantial changes",
 };
 
@@ -31,7 +32,7 @@ function detectCsxSkill(prompt) {
   if (typeof prompt !== "string") return null;
 
   const match = prompt.match(
-    /^\s*(?:\$csx-(analyze|spec|plan-pro|plan|start-goal|code-review)|csx\s+(analyze|spec|plan-pro|plan|start-goal|code-review))\b/i,
+    /^\s*(?:\$csx-(analyze|spec|plan-pro|plan|start-goal|deslop|code-review)|csx\s+(analyze|spec|plan-pro|plan|start-goal|deslop|code-review))\b/i,
   );
   if (!match) return null;
 

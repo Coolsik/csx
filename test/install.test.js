@@ -67,6 +67,8 @@ test("global install preserves existing config", async () => {
   assert.equal(result.root, codex);
   assert.equal(await readFile(join(codex, "skills", "csx-plan", "SKILL.md"), "utf8")
     .then((text) => text.includes("name: csx-plan")), true);
+  assert.equal(existsSync(join(codex, "skills", "csx-deslop", "SKILL.md")), true);
+  assert.equal(existsSync(join(codex, "skills", "csx-deslop", "agents", "openai.yaml")), true);
   assert.equal(existsSync(join(codex, "agents", "csx-planner.toml")), true);
   const config = await readFile(join(codex, "config.toml"), "utf8");
   assert.match(config, /model = "example"/);
@@ -125,6 +127,8 @@ test("project install uses the current directory and is isolated from global Cod
   await install({ scope: "project", cwd: root, env: { HOME: home } });
 
   assert.equal(existsSync(join(root, ".agents", "skills", "csx-spec", "SKILL.md")), true);
+  assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "SKILL.md")), true);
+  assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "agents", "openai.yaml")), true);
   assert.equal(existsSync(join(root, ".codex", "agents", "csx-analyst.toml")), true);
   assert.equal(existsSync(join(home, ".codex")), false);
 });

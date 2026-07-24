@@ -8,10 +8,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const hook = resolve(root, "payload", "hooks", "csx-hook.mjs");
 
 test("hook routes direct and shorthand csx skill prompts", async () => {
-  for (const prompt of ["$csx-plan-pro migrate safely", "csx spec define this"]) {
+  for (const prompt of [
+    "$csx-plan-pro migrate safely",
+    "csx spec define this",
+    "$csx-deslop clean the bounded diff",
+    "csx deslop clean the bounded diff",
+  ]) {
     const output = await runHook({ hook_event_name: "UserPromptSubmit", prompt });
     const parsed = JSON.parse(output);
-    assert.match(parsed.hookSpecificOutput.additionalContext, /\$csx-(plan-pro|spec) skill/);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /\$csx-(plan-pro|spec|deslop) skill/);
   }
 });
 

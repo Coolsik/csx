@@ -127,3 +127,85 @@ test("csx-start-goal accepts only explicitly authorized ready plans", async () =
   assert.match(skill, /Verification Matrix/);
   assert.match(skill, /instead of weakening or rediscovering them/);
 });
+
+test("csx-start-goal uses one aggregate goal and preserves unlimited acceptance criteria", async () => {
+  const skill = await readFile(resolve(root, "payload/skills/csx-start-goal/SKILL.md"), "utf8");
+
+  assert.match(skill, /Use exactly one aggregate Codex goal for the entire accepted plan/);
+  assert.match(skill, /Never create one Codex goal per execution goal/);
+  assert.match(skill, /implementation of the whole accepted plan/);
+  assert.match(skill, /direct evidence for every acceptance criterion/);
+  assert.match(skill, /Do not impose a count limit on acceptance criteria/);
+  assert.match(skill, /Every acceptance criterion from the accepted input is a required criterion/);
+  assert.match(skill, /Optionally group criteria under 2-5 top-level outcomes only when that improves readability/);
+  assert.match(skill, /do not replace, merge, weaken, or summarize away original criteria or failure signals/);
+  assert.match(skill, /Before implementation, assign each criterion concrete expected evidence/);
+});
+
+test("csx-start-goal defines risk-based ownership, deslop ordering, and execution states", async () => {
+  const [skill, executor] = await Promise.all([
+    readFile(resolve(root, "payload/skills/csx-start-goal/SKILL.md"), "utf8"),
+    readFile(resolve(root, "payload/agents/csx-executor.toml"), "utf8"),
+  ]);
+
+  assert.match(skill, /`G001\.\.\.Gnnn` bounded implementation results/);
+  assert.match(skill, /`pending -> in_progress -> ready_for_review -> complete`/);
+  assert.match(skill, /`ready_for_review -> rework -> in_progress -> ready_for_review`/);
+  assert.match(skill, /public API, schema, security, concurrency, migration, dependency, or architecture boundary/);
+  assert.match(skill, /requires no coordination across modules/);
+  assert.match(skill, /One focused verification can prove the result/);
+  assert.match(skill, /If any condition is false or uncertain, assign the bounded goal to `csx-executor`/);
+  assert.match(
+    skill,
+    /Run the assigned initial verification[\s\S]*invoke `\$csx-deslop` after initial verification[\s\S]*post-deslop verification/,
+  );
+  assert.match(skill, /Run independent goals in parallel only when they have no dependency and no overlapping file ownership/);
+  assert.match(executor, /invoke \$csx-deslop after the initial verification/);
+  assert.match(executor, /run the assigned post-deslop verification/);
+});
+
+test("csx-start-goal repeats cumulative review and never depends on csx-verifier", async () => {
+  const [skill, verifier, installer] = await Promise.all([
+    readFile(resolve(root, "payload/skills/csx-start-goal/SKILL.md"), "utf8"),
+    readFile(resolve(root, "payload/agents/csx-verifier.toml"), "utf8"),
+    readFile(resolve(root, "lib/install.js"), "utf8"),
+  ]);
+
+  assert.match(skill, /Begin final review only when every execution goal is `ready_for_review`/);
+  assert.match(skill, /entire cumulative diff/);
+  assert.match(skill, /`csx-code-reviewer: APPROVE`/);
+  assert.match(skill, /`csx-architect: CLEAR`/);
+  assert.match(skill, /final `Verdict: APPROVE`/);
+  assert.match(skill, /`COMMENT`, `WATCH`, `REQUEST CHANGES`, `BLOCK`, a missing required lane/);
+  assert.match(
+    skill,
+    /Move affected goals to `rework`[\s\S]*assign every rework fix to `csx-executor`[\s\S]*Re-run scoped deslop and post-deslop verification[\s\S]*re-run integrated verification and `\$csx-code-review`/,
+  );
+  assert.match(skill, /Any code change after a review invalidates every earlier approval/);
+  assert.match(skill, /Keep the aggregate goal active/);
+  assert.match(skill, /call `update_goal` with `complete` exactly once/);
+  assert.doesNotMatch(skill, /csx-verifier/);
+  assert.match(verifier, /name = "csx-verifier"/);
+  assert.match(installer, /"csx-verifier"/);
+});
+
+test("csx-deslop locks behavior, limits scope, verifies cleanup, and escalates risk", async () => {
+  const [skill, metadata] = await Promise.all([
+    readFile(resolve(root, "payload/skills/csx-deslop/SKILL.md"), "utf8"),
+    readFile(resolve(root, "payload/skills/csx-deslop/agents/openai.yaml"), "utf8"),
+  ]);
+
+  assert.match(skill, /Lock existing behavior before cleanup by running the assigned verification unchanged/);
+  assert.match(skill, /only the owned changed files and corresponding tests/);
+  assert.match(skill, /speculative or masking fallbacks/);
+  assert.match(skill, /duplicated logic/);
+  assert.match(skill, /dead or unreachable code/);
+  assert.match(skill, /unnecessary abstractions or indirection/);
+  assert.match(skill, /violations of an existing module or ownership boundary/);
+  assert.match(skill, /weak, swallowed, or misleading error handling/);
+  assert.match(skill, /Apply one safe smell category at a time/);
+  assert.match(skill, /Re-run the same behavior-lock verification after cleanup/);
+  assert.match(skill, /passed\/no-op report/);
+  assert.match(skill, /Return it to the leader as a blocker/);
+  assert.match(metadata, /allow_implicit_invocation: false/);
+});

@@ -1,0 +1,6 @@
+interface:
+  display_name: "CSX Deslop"
+  short_description: "Clean bounded changes and re-run verification"
+  default_prompt: "Use $csx-deslop to simplify the bounded change safely and re-run its verification."
+policy:
+  allow_implicit_invocation: false
