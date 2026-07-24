@@ -2,7 +2,7 @@
 
 const SKILL_HINTS = {
   analyze: "read-only repository analysis with file-backed evidence and confidence labels",
-  spec: "requirements clarification with acceptance criteria, scope, non-goals, and assumptions",
+  spec: "evidence-grounded requirements clarification with readiness, scope, constraints, acceptance criteria, non-goals, and decision boundaries",
   plan: "concise implementation plan with verification and risk checks",
   "plan-pro": "higher-rigor plan with bounded architect and critic review",
   "start-goal": "durable task execution with success criteria and evidence",
