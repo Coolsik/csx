@@ -16,6 +16,42 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: npm test
+      - run: npm ci
       - run: npm run check
       - run: npm pack --dry-run
+      - name: Detect native transaction-mutation capability without writes
+        id: mutation-capability
+        continue-on-error: true
+        run: >-
+          node --input-type=module -e "import { classifyLocalFilesystem, loadLockCapability } from './lib/transaction-lock.js'; loadLockCapability(); await classifyLocalFilesystem(process.cwd());"
+      - name: Run the full suite where native transaction mutation is supported
+        if: steps.mutation-capability.outcome == 'success'
+        run: npm test
+      - name: Prove unsupported transaction capability refuses public commands without writes
+        if: steps.mutation-capability.outcome != 'success'
+        run: >-
+          node --input-type=module -e "import assert from 'node:assert/strict'; import { spawn } from 'node:child_process'; import { existsSync } from 'node:fs'; import { cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'; import { tmpdir } from 'node:os'; import { join, resolve } from 'node:path'; import pty from 'node-pty'; import { classifyLocalFilesystem, loadLockCapability, TransactionLockError } from './lib/transaction-lock.js'; const root = await mkdtemp(join(tmpdir(), 'csx-public-refusal-')); const run = (args, env) => new Promise((done) => { const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] }); let stderr = ''; child.stderr.on('data', (chunk) => { stderr += chunk; }); child.on('close', (code) => done({ code, stderr })); }); try { let expected; try { loadLockCapability(); await classifyLocalFilesystem(root); } catch (error) { expected = error; } assert.ok(expected instanceof TransactionLockError); const env = { ...process.env, HOME: join(root, 'home'), CODEX_HOME: join(root, 'codex-home') }; for (const command of [['install', '--scope', 'global'], ['uninstall']]) { const result = await run([resolve('bin/csx.js'), ...command], env); assert.equal(result.code, 1); assert.match(result.stderr, new RegExp('csx: \\\\[' + expected.code + '\\\\] ' + expected.message)); } const setupRoot = join(root, 'setup'); const setupHome = join(setupRoot, 'home'); const agents = join(setupHome, 'agents'); const bin = join(setupRoot, 'bin'); await mkdir(setupHome, { recursive: true }); await cp('payload/agents', agents, { recursive: true }); await mkdir(bin); const files = ['csx-explorer', 'csx-analyst', 'csx-planner', 'csx-architect', 'csx-critic', 'csx-executor', 'csx-verifier', 'csx-code-reviewer'].map((name) => join(agents, name + '.toml')); await writeFile(join(setupHome, '.csx-install-receipt.json'), JSON.stringify({ root: setupHome, files })); const server = join(bin, 'codex.mjs'); await writeFile(server, 'import readline from \\'node:readline\\'; const efforts = [\\'low\\', \\'medium\\', \\'high\\', \\'xhigh\\'].map((reasoningEffort) => ({ reasoningEffort })); readline.createInterface({ input: process.stdin }).on(\\'line\\', (line) => { const request = JSON.parse(line); if (request.id && request.method === \\'initialize\\') process.stdout.write(JSON.stringify({ jsonrpc: \\'2.0\\', id: request.id, result: {} }) + \\'\\\\n\\'); if (request.id && request.method === \\'model/list\\') process.stdout.write(JSON.stringify({ jsonrpc: \\'2.0\\', id: request.id, result: { data: [\\'gpt-5.6-sol\\', \\'gpt-5.6-luna\\', \\'gpt-5.6-terra\\'].map((model) => ({ model, hidden: false, supportedReasoningEfforts: efforts })), nextCursor: null } }) + \\'\\\\n\\'); });'); const executable = process.platform === 'win32' ? join(bin, 'codex.cmd') : join(bin, 'codex'); await writeFile(executable, process.platform === 'win32' ? '@node \\' + server + \\'\\r\\n' : '#!/bin/sh\\nexec node \\' + server + \\'\\n', { mode: 0o755 }); const output = await new Promise((done) => { const child = pty.spawn(process.execPath, [resolve('bin/csx.js'), 'setup'], { cwd: setupRoot, env: { ...env, CODEX_HOME: setupHome, PATH: bin + (process.platform === 'win32' ? ';' : ':') + process.env.PATH } }); const answers = [['Enter 1-5: ', '1'], ['Select a row or d: ', 'd'], ...['csx-explorer', 'csx-analyst', 'csx-planner', 'csx-architect', 'csx-critic', 'csx-executor', 'csx-verifier', 'csx-code-reviewer'].map((name) => ['Apply change for ' + name + '? [y/N] ', 'y']), ['Save this full matrix as a global custom preset? [y/N] ', 'n'], ['Apply these changes? [y/N] ', 'y']]; let text = ''; child.onData((data) => { text += data; if (answers.length && text.includes(answers[0][0])) child.write(answers.shift()[1] + '\\r'); }); child.onExit(({ exitCode }) => done({ code: exitCode, text })); }); assert.equal(output.code, 1); assert.match(output.text, new RegExp('csx: \\\\[' + expected.code + '\\\\] ' + expected.message)); assert.equal(existsSync(join(root, 'home', '.codex')), false); assert.equal(existsSync(join(root, 'codex-home', '.csx-transactions')), false); assert.equal(existsSync(join(setupHome, '.csx-transactions')), false); } finally { await rm(root, { recursive: true, force: true }); }"
+      - name: Packed install refuses a missing optional native lock without mutation
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 20
+        shell: bash
+        run: |
+          package="$(npm pack)"
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work" "$package"' EXIT
+          npm install --prefix "$work" --omit=optional "$package"
+          home="$work/home"
+          codex_home="$work/codex-home"
+          mkdir -p "$home" "$codex_home"
+          set +e
+          HOME="$home" CODEX_HOME="$codex_home" node "$work/node_modules/@coolsik/csx/bin/csx.js" install --scope global >"$work/stdout" 2>"$work/stderr"
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fx 'csx: [lock_capability_unavailable] native transaction locking is unavailable. This filesystem cannot safely lock csx transactions. Use a supported local filesystem with native locking support.' "$work/stderr"
+          test ! -e "$home/.codex"
+          test ! -e "$codex_home/.csx-transactions"
+          test ! -e "$codex_home/.csx-install-receipt.json"
+          test ! -e "$codex_home/agents"
+          test ! -e "$codex_home/hooks"
+          test ! -e "$codex_home/skills"
+          test ! -e "$codex_home/config.toml"

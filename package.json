@@ -15,10 +15,13 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check bin/csx.js && node --check lib/install.js && node --check payload/hooks/csx-hook.mjs"
+    "check": "node --check bin/csx.js && node --check lib/codex-models.js && node --check lib/install.js && node --check lib/installation-state.js && node --check lib/presets.js && node --check lib/setup.js && node --check lib/transaction-lock.js && node --check lib/transaction.js && node --check payload/hooks/csx-hook.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "optionalDependencies": {
+    "fs-ext-extra-prebuilt": "2.2.9"
   },
   "license": "MIT",
   "author": "coolsik",
@@ -28,5 +31,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

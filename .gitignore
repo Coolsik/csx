@@ -1,1 +1,4 @@
 .omo/
+node_modules/
+.gjc/
+.csx-transactions/

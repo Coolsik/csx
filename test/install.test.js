@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
+import { spawn } from "node:child_process";
 import {
   FEATURE_MANAGED_END,
   FEATURE_MANAGED_START,
-  install,
+  install as installCore,
   MANAGED_END,
   MANAGED_START,
-  uninstall,
+  uninstall as uninstallCore,
   windowsCommand
 } from "../lib/install.js";
 
@@ -19,6 +20,41 @@ const roots = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+const transactionApi = {
+  async recoverTransactions() {
+    return [];
+  },
+  async beginTransaction({ snapshotSet }) {
+    const snapshots = new Map(await Promise.all(snapshotSet.map(async (path) => {
+      try {
+        return [path, { data: await readFile(path), present: true }];
+      } catch (error) {
+        if (error.code === "ENOENT") return [path, { present: false }];
+        throw error;
+      }
+    })));
+    return {
+      async write(path, data, { mode } = {}) {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, data, mode ? { mode } : undefined);
+      },
+      async remove(path) {
+        await rm(path, { force: true });
+      },
+      async commit() {},
+      async close() {},
+      async rollback() {
+        for (const [path, before] of snapshots) {
+          if (!before.present) await rm(path, { force: true });
+          else await writeFile(path, before.data);
+        }
+      }
+    };
+  }
+};
+
+const install = (options) => installCore({ ...options, transactionApi });
+const uninstall = (options) => uninstallCore({ ...options, transactionApi });
 
 test("global install preserves existing config", async () => {
   const home = await temporary("global home ");
@@ -47,6 +83,30 @@ test("global install creates the default Codex home when absent", async () => {
 
   assert.equal(existsSync(join(codex, ".csx-install-receipt.json")), true);
   assert.equal(existsSync(join(codex, "skills", "csx-analyze", "SKILL.md")), true);
+});
+test("fresh global install moves transaction coordination into CODEX_HOME after bootstrap", async () => {
+  const home = await temporary("root-local global coordination ");
+  const codex = join(home, ".codex");
+  const declarations = [];
+  const recoveries = [];
+  const recordingApi = {
+    async recoverTransactions(root) {
+      recoveries.push(root);
+      return [];
+    },
+    async beginTransaction(declaration) {
+      declarations.push(declaration);
+      return transactionApi.beginTransaction(declaration);
+    }
+  };
+
+  await installCore({ scope: "global", env: { HOME: home }, transactionApi: recordingApi });
+
+  assert.equal(declarations.length, 1);
+  assert.equal(declarations[0].operation, "install");
+  assert.equal(declarations[0].participants[0].coordinationRoot, codex);
+  assert.deepEqual(recoveries, [codex]);
+  assert.equal(existsSync(join(home, ".csx-transactions")), false);
 });
 
 test("explicit missing CODEX_HOME fails without creating it", async () => {
@@ -89,6 +149,147 @@ test("project install rejects a missing project root", async () => {
     /project root does not exist/
   );
 });
+test("fresh install declares complete preimages and commits the receipt last", async () => {
+  const root = await temporary("transaction declaration ");
+  const calls = [];
+  const recordingApi = {
+    recoverTransactions: transactionApi.recoverTransactions,
+    async beginTransaction(declaration) {
+      calls.push({ declaration, writes: [] });
+      const transaction = await transactionApi.beginTransaction(declaration);
+      return {
+        ...transaction,
+        async write(path, data, options) {
+          calls[0].writes.push(path);
+          await transaction.write(path, data, options);
+        }
+      };
+    }
+  };
+
+  await installCore({ scope: "project", projectRoot: root, transactionApi: recordingApi });
+
+  const { declaration, writes } = calls[0];
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  assert.equal(declaration.participants[0].role, "prospective-installation-target");
+  assert.equal(declaration.snapshotSet.includes(receiptPath), true);
+  assert.deepEqual([...declaration.snapshotSet].sort(), [...declaration.writeSet].sort());
+  assert.equal(writes.at(-1), receiptPath);
+  assert.deepEqual(Object.keys(declaration.participants[0].preimages).sort(), [...declaration.snapshotSet].sort());
+  assert.equal(declaration.participants[0].preimages[receiptPath].state, "absent");
+});
+test("install rejects config drift that occurs before transaction authority", async () => {
+  const root = await temporary("config drift ");
+  const configPath = join(root, ".codex", "config.toml");
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, 'model = "before"\n');
+  const driftingApi = {
+    recoverTransactions: transactionApi.recoverTransactions,
+    async beginTransaction(declaration) {
+      await writeFile(configPath, 'model = "concurrent"\n');
+      return transactionApi.beginTransaction(declaration);
+    }
+  };
+
+  await assert.rejects(
+    installCore({ scope: "project", projectRoot: root, transactionApi: driftingApi }),
+    /installation state changed before transaction authority/
+  );
+  assert.equal(await readFile(configPath, "utf8"), 'model = "concurrent"\n');
+});
+
+test("uninstall rejects a receipt with an extra owned path", async () => {
+  const root = await temporary("receipt extra ");
+  await install({ scope: "project", projectRoot: root });
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.files.push(join(root, ".codex", "agents", "extra.toml"));
+  await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
+
+  await assert.rejects(uninstall({ projectRoot: root }), /receipt does not match the installed package paths/);
+});
+
+test("uninstall propagates unreadable receipt errors", async () => {
+  const root = await temporary("unreadable receipt ");
+  await install({ scope: "project", projectRoot: root });
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  await chmod(receiptPath, 0);
+  try {
+    await assert.rejects(uninstall({ projectRoot: root }), /EACCES|EPERM/);
+  } finally {
+    await chmod(receiptPath, 0o600);
+  }
+});
+
+test("fresh global re-entry recovers the stable bootstrap ancestor", async () => {
+  const home = await temporary("fresh global re-entry ");
+  const codex = join(home, ".codex");
+  await mkdir(codex);
+  const recovered = [];
+  const recordingApi = {
+    ...transactionApi,
+    async recoverTransactions(root) {
+      recovered.push(root);
+      return [];
+    }
+  };
+
+  await installCore({ scope: "global", env: { HOME: home }, transactionApi: recordingApi });
+  assert.equal(recovered.includes(codex), true);
+  assert.equal(recovered.includes(home), false);
+});
+test("supported Linux recovers an interrupted transaction after forced process death and re-entry", { skip: process.platform !== "linux" }, async () => {
+  const root = await temporary("forced-death recovery ");
+  const configPath = join(root, "config.toml");
+  const receiptPath = join(root, ".csx-install-receipt.json");
+  const target = join(root, "managed.txt");
+  const transactionUrl = new URL("../lib/transaction.js", import.meta.url).href;
+  const declaration = {
+    operation: "install",
+    participants: [{
+      role: "prospective-installation-target",
+      root,
+      configPath,
+      receiptPath,
+      paths: [configPath, receiptPath, target],
+      preimages: {
+        [configPath]: { state: "absent" },
+        [receiptPath]: { state: "absent" },
+        [target]: { state: "absent" }
+      }
+    }],
+    snapshotSet: [configPath, receiptPath, target],
+    writeSet: [target]
+  };
+  const writer = await runNodeModule(
+    `import { beginTransaction } from ${JSON.stringify(transactionUrl)};
+const transaction = await beginTransaction(JSON.parse(process.argv.at(-2)));
+await transaction.write(process.argv.at(-1), "interrupted replacement\\n", { mode: 0o600 });
+process.kill(process.pid, "SIGKILL");`,
+    [JSON.stringify(declaration), target]
+  );
+  assert.equal(writer.signal, "SIGKILL");
+  assert.equal(existsSync(target), true);
+  assert.equal(await readFile(target, "utf8"), "interrupted replacement\n");
+
+  const recovery = await runNodeModule(
+    `import { recoverTransactions, recoveryAuthorityFromDeclaration } from ${JSON.stringify(transactionUrl)};
+const declaration = JSON.parse(process.argv.at(-2));
+const recovered = await recoverTransactions(process.argv.at(-1), recoveryAuthorityFromDeclaration(declaration));
+process.stdout.write(JSON.stringify(recovered));`,
+    [JSON.stringify(declaration), root]
+  );
+  assert.equal(recovery.code, 0, recovery.stderr);
+  assert.equal(JSON.parse(recovery.stdout).length, 1);
+  assert.equal(existsSync(target), false);
+});
+
+test("transaction adapter must provide both core operations", async () => {
+  await assert.rejects(
+    installCore({ scope: "project", projectRoot: await temporary("bad transaction api "), transactionApi: {} }),
+    /transactionApi must provide beginTransaction and recoverTransactions/
+  );
+});
 
 test("repeat install updates receipt-owned files", async () => {
   const root = await temporary("repeat ");
@@ -102,6 +303,51 @@ test("repeat install updates receipt-owned files", async () => {
   const config = await readFile(join(root, ".codex", "config.toml"), "utf8");
   assert.equal(config.split(MANAGED_START).length - 1, 1);
   assert.equal(config.split(FEATURE_MANAGED_START).length - 1, 1);
+});
+test("repeat install retains valid receipt setup agent selections", async () => {
+  const root = await temporary("repeat setup receipt ");
+  await install({ scope: "project", projectRoot: root });
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.setupAgentMatrix = {
+    version: 1,
+    agents: Object.fromEntries([
+      "csx-explorer", "csx-analyst", "csx-planner", "csx-architect",
+      "csx-critic", "csx-executor", "csx-verifier", "csx-code-reviewer"
+    ].map((agent) => [agent, { model: "saved-model", reasoning: "saved-effort" }]))
+  };
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+
+  await install({ scope: "project", projectRoot: root });
+
+  const agent = await readFile(join(root, ".codex", "agents", "csx-explorer.toml"), "utf8");
+  assert.match(agent, /model = "saved-model"/);
+  assert.match(agent, /model_reasoning_effort = "saved-effort"/);
+});
+
+test("install retains write, rollback, and close failures", async () => {
+  const root = await temporary("aggregate transaction ");
+  const writeFailure = new Error("write failed");
+  const rollbackFailure = new Error("rollback failed");
+  const closeFailure = new Error("close failed");
+  const failingApi = {
+    async recoverTransactions() {},
+    async beginTransaction() {
+      return {
+        async write() { throw writeFailure; },
+        async rollback() { throw rollbackFailure; },
+        async close() { throw closeFailure; }
+      };
+    }
+  };
+
+  await assert.rejects(
+    installCore({ scope: "project", projectRoot: root, transactionApi: failingApi }),
+    (error) => error instanceof AggregateError &&
+      error.errors[0] === writeFailure &&
+      error.errors[1] === rollbackFailure &&
+      error.errors[2] === closeFailure
+  );
 });
 
 test("repeat install upgrades a receipt from before feature management", async () => {
@@ -215,6 +461,79 @@ test("unsupported inline features fail before payload writes", async () => {
   );
   assert.equal(existsSync(join(root, ".agents")), false);
 });
+test("escaped basic keys and tables fail before mutation", async () => {
+  for (const config of [
+    "\"featu\\u0072es\" = { apps = false }\n",
+    "[features]\n[\"featu\\u0072es\"]\napps = false\n"
+  ]) {
+    const root = await temporary("escaped TOML key ");
+    const configPath = join(root, ".codex", "config.toml");
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, config);
+
+    await assert.rejects(
+      install({ scope: "project", projectRoot: root }),
+      /cannot safely parse TOML before mutation/
+    );
+    assert.equal(await readFile(configPath, "utf8"), config);
+    assert.equal(existsSync(join(root, ".agents")), false);
+  }
+});
+
+test("quoted dotted TOML table keys remain distinct from dotted paths", async () => {
+  const root = await temporary("quoted dotted TOML key ");
+  const configPath = join(root, ".codex", "config.toml");
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, "[\"features.experimental\"]\nenabled = true\n");
+
+  await install({ scope: "project", projectRoot: root });
+
+  const installed = await readFile(configPath, "utf8");
+  assert.match(installed, /\["features\.experimental"\]\nenabled = true/);
+  assert.match(installed, /\[features\]\ndefault_mode_request_user_input = true/);
+});
+test("install scans BOM CRLF comments and multiline TOML strings before locating features", async () => {
+  const root = await temporary("toml scanner ");
+  const configPath = join(root, ".codex", "config.toml");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(
+    configPath,
+    "\ufefftitle = \"# not a comment\"\r\nbasic = \"\"\"\r\n[not-a-table]\r\n# not a comment\r\n\"\"\"\r\nliteral = '''\r\n[also-not-a-table]\r\n# still text\r\n'''\r\n# [commented.table]\r\n[features] # real table\r\napps = false\r\n"
+  );
+
+  await install({ scope: "project", projectRoot: root });
+
+  const installed = await readFile(configPath, "utf8");
+  assert.match(installed, /basic = """/);
+  assert.match(installed, /literal = '''/);
+  assert.match(installed, /\[features\] # real table/);
+  assert.match(installed, /default_mode_request_user_input = true/);
+});
+
+test("a quoted dotted key is not treated as a features dotted key", async () => {
+  const root = await temporary("quoted dotted key ");
+  const configPath = join(root, ".codex", "config.toml");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(configPath, '"features.default_mode_request_user_input" = false\n');
+
+  await install({ scope: "project", projectRoot: root });
+
+  const installed = await readFile(configPath, "utf8");
+  assert.match(installed, /"features\.default_mode_request_user_input" = false/);
+  assert.match(installed, /\[features\]\ndefault_mode_request_user_input = true/);
+});
+
+test("duplicate top-level TOML keys fail before payload writes", async () => {
+  const root = await temporary("duplicate toml key ");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(join(root, ".codex", "config.toml"), "model = \"one\"\nmodel = \"two\"\n");
+
+  await assert.rejects(
+    install({ scope: "project", projectRoot: root }),
+    /duplicate top-level TOML key/
+  );
+  assert.equal(existsSync(join(root, ".agents")), false);
+});
 
 test("broken feature markers fail before payload writes", async () => {
   const root = await temporary("broken feature markers ");
@@ -278,6 +597,32 @@ test("uninstall prefers the current project, then removes global, and is idempot
 
   assert.deepEqual(await uninstall({ cwd: project, env: { HOME: home } }), { removed: false });
 });
+test("uninstall recovers candidates strictly in project-first precedence order", async () => {
+  const home = await temporary("uninstall recovery home ");
+  const globalRoot = join(home, ".codex");
+  const project = await temporary("uninstall recovery project ");
+  await mkdir(globalRoot, { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  await installCore({ scope: "project", projectRoot: project });
+
+  const recovered = [];
+  const recordingApi = {
+    ...transactionApi,
+    async recoverTransactions(root) {
+      recovered.push(resolve(root));
+      return [];
+    }
+  };
+
+  const first = await uninstallCore({ cwd: project, env: { HOME: home }, transactionApi: recordingApi });
+  assert.equal(first.scope, "project");
+  assert.deepEqual(recovered, [resolve(project)]);
+
+  recovered.length = 0;
+  const second = await uninstallCore({ cwd: project, env: { HOME: home }, transactionApi: recordingApi });
+  assert.equal(second.scope, "global");
+  assert.deepEqual(recovered, [resolve(project), resolve(globalRoot)]);
+});
 
 test("uninstall preserves unrelated config and non-empty directories", async () => {
   const root = await temporary("preserve ");
@@ -298,6 +643,20 @@ async function temporary(prefix) {
   const root = await mkdtemp(join(tmpdir(), `csx-${prefix}`));
   roots.push(root);
   return resolve(root);
+}
+function runNodeModule(script, args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "--eval", script, ...args], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolvePromise({ code, signal, stdout, stderr }));
+  });
 }
 
 function escapeRegExp(value) {

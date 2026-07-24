@@ -1,13 +1,21 @@
 # csx
 
 csx installs a small set of Codex-native workflow skills, custom agents, and an
-explicit prompt-routing hook. It has no runtime dependencies, background
-service, MCP server, or Codex plugin.
+explicit prompt-routing hook. It has no background service, MCP server, or
+Codex plugin. Mutating commands require the optional native
+`fs-ext-extra-prebuilt@2.2.9` package at runtime and fail closed when that
+capability is unavailable.
 
 ## Requirements
 
 - Node.js 20 or newer
-- Codex on macOS, Linux, or Windows
+- Codex on Linux, with a verified local filesystem
+
+Transactional mutations are supported only on verified local Linux filesystems.
+macOS and Windows installations fail closed because this runtime cannot establish
+the required local-volume identity; they do not fall back to an unlocked or
+best-effort install.
+
 
 ## Install
 
@@ -27,8 +35,9 @@ csx install --scope project
 csx install --scope project --project-root /path/to/workspace
 ```
 
-Global installation writes only below `${CODEX_HOME:-~/.codex}`. If
-`CODEX_HOME` is explicitly set, that directory must already exist.
+Global installation writes only below `${CODEX_HOME:-~/.codex}`, including its
+root-local `.csx-transactions` recovery control state. If `CODEX_HOME` is
+explicitly set, that directory must already exist.
 
 Project installation writes skills to `.agents/skills`, agents and hooks to
 `.codex`, and a managed block to `.codex/config.toml`. Without
@@ -47,6 +56,32 @@ csx refuses to overwrite same-name files unless its installation receipt proves
 they are managed by csx. Existing config outside the marked csx block is
 preserved. Start a new Codex session after installation. Codex will ask you to
 review and trust the command hook on first use.
+## Setup
+
+```bash
+csx setup
+```
+
+`csx setup` is an interactive-only model configuration flow. It selects the
+receipt-backed project installation in the current directory when present;
+otherwise it configures the global installation. A project setup reads and
+writes only that receipt-backed project scope while using Low, Medium, or High.
+Saved global custom presets are read only after selecting that initial menu
+choice, and global preset storage is read only after the final effective matrix
+has changes you approve for saving. Model discovery still runs the active Codex
+app-server with its resolved `CODEX_HOME`. It obtains the available model and
+reasoning-effort pairs from that app-server, so a stale agent setting must be
+repaired before it can be applied.
+
+Choose Low, Medium, High, a saved global custom preset, or Edit current matrix;
+then select any agent row to change its model and effort before reviewing the
+exact per-field diff and selected scope root. Low and Medium use the explicit
+csx role mapping. High reflects the currently bundled agent definitions. A
+confirmed effective matrix with selected changes can be saved as a global
+preset; preset names must be unique. Setup writes only selected receipt-owned
+agent files, plus the complete effective-agent-matrix receipt and approved
+global-preset metadata, in one transaction; it rolls back all selected changes
+on failure.
 
 ## Skills
 
@@ -97,6 +132,22 @@ npm test
 npm run check
 npm pack --dry-run
 ```
+CI runs syntax checks and package dry-runs on Ubuntu, macOS, and Windows with
+Node 20 and 22. Each lane then classifies the optional native lock and local
+filesystem without writes. A lane that passes that classifier runs the full
+test suite, including native transaction mutation. Every other lane instead
+proves that lock acquisition fails with a classified
+`lock_capability_unavailable` or `lock_filesystem_unsupported` refusal without
+creating `.csx-transactions`. On a supported Linux runner, the full suite also
+proves native-lock contention and recovery after a subprocess is forcibly
+killed and a new process re-enters recovery; it does not prove recovery across
+a VM or host reboot. The Ubuntu Node 20 lane also installs the packed package
+with optional dependencies omitted, sets deterministic `HOME` and existing
+`CODEX_HOME` directories, and requires a nonzero exit with the exact
+`lock_capability_unavailable` CLI diagnostic before asserting that neither the
+default home nor the selected `CODEX_HOME` contains installation or
+transaction-control paths. CLI setup interaction is exercised through a real
+PTY for completion, cancellation, and EOF handling on supported runners.
 
 ## License
 
