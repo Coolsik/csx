@@ -103,6 +103,13 @@ natural-language prompts are not routed.
 Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
 architect, critic, executor, verifier, and code-reviewer.
 
+`csx-plan` and `csx-plan-pro` produce versioned planning artifacts under
+`.csx/plans/`. A revised draft must be reviewed again, and `csx-plan-pro`
+requires Architect `CLEAR` plus Critic `APPROVED` for the same draft version.
+Both skills record verification evidence and finish with an explicit choice to
+refine, stop, or authorize execution through `csx-start-goal`; BLOCKED plans
+cannot enter execution.
+
 ## Uninstall
 
 ```bash
