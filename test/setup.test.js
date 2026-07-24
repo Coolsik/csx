@@ -275,6 +275,11 @@ test("agent scanner rejects duplicate, table-decoy, and malformed escaped assign
     for (const name of AGENT_NAMES) {
       await writeFile(join(agents, `${name}.toml`), 'model = "gpt-5.4-mini"\nmodel_reasoning_effort = "low"\n');
     }
+    await writeFile(
+      join(agents, `${AGENT_NAMES[0]}.toml`),
+      'developer_instructions = """\nReject vague "works" claims.\nmodel = "decoy"\n"""\nmodel = "gpt-5.4-mini"\nmodel_reasoning_effort = "low"\n'
+    );
+    assert.deepEqual((await readAgentMatrix(agents))[AGENT_NAMES[0]], { model: "gpt-5.4-mini", reasoning: "low" });
     await writeFile(join(agents, `${AGENT_NAMES[0]}.toml`), '\uFEFFmodel = """gpt-5.4-mini"""\nmodel_reasoning_effort = """low"""\n');
     assert.deepEqual((await readAgentMatrix(agents))[AGENT_NAMES[0]], { model: "gpt-5.4-mini", reasoning: "low" });
     await writeFile(join(agents, `${AGENT_NAMES[0]}.toml`), 'model = "gpt-5.4-mini"\nmodel_reasoning_effort = "low"\n[decoy]\nmodel = "other"\n');
