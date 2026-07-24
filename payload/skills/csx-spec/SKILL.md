@@ -14,6 +14,16 @@ Use this skill to convert ambiguity into an actionable spec with minimal questio
 - Stop questioning when the remaining unknowns do not change the first implementation plan.
 - Write the final artifact to `.csx/specs/<slug>.md` when the task is more than a one-turn clarification.
 
+## Root User Decisions
+
+After repository inspection, use `request_user_input` in the root thread for the highest-risk user-owned decision that would change the implementation plan.
+
+- Send exactly one question per call, with 2-3 mutually exclusive options.
+- Put the recommended option first and suffix its label with `(Recommended)`.
+- Treat any user note returned with the selection as a binding constraint in the spec.
+- Never delegate this tool call to a sub-agent.
+- Use a direct text question when the answer must be open-ended or the tool is unavailable.
+
 ## Independent Checks
 
 For a non-trivial spec, use the installed csx roles:

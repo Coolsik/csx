@@ -50,6 +50,7 @@ try {
         cwd: process.cwd()
       });
       process.stdout.write(`Installed csx ${result.version} (${scope}) in ${result.root}\n`);
+      process.stdout.write("Enabled Codex Default mode user-input choices for this install scope.\n");
       process.stdout.write("Start a new Codex session to load the installed skills and agents.\n");
       process.stdout.write("On first hook use, review and trust the csx hook when Codex prompts you.\n");
     }

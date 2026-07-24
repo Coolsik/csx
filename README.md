@@ -35,6 +35,14 @@ Project installation writes skills to `.agents/skills`, agents and hooks to
 `--project-root`, csx installs into the directory where the command is run.
 Git is not required. Project installation never changes the global Codex home.
 
+For the selected scope, installation also enables
+`features.default_mode_request_user_input` so `csx-spec`, `csx-plan`, and
+`csx-plan-pro` can present Codex's built-in choices and Tab notes in Default
+mode. An existing `true` value remains user-owned. An existing `false` value is
+temporarily overridden and restored by `csx uninstall`. Project config applies
+only to trusted projects, and higher-precedence or managed requirements can
+still disable the feature.
+
 csx refuses to overwrite same-name files unless its installation receipt proves
 they are managed by csx. Existing config outside the marked csx block is
 preserved. Start a new Codex session after installation. Codex will ask you to
@@ -69,7 +77,8 @@ csx uninstall
 The command first checks the current directory for a receipt-backed project
 installation. If the current directory has no receipt, it removes the global
 installation. It deletes only receipt-owned files and the csx-managed config
-block, preserving other settings and non-empty directories.
+blocks, restoring any `default_mode_request_user_input` value that installation
+temporarily overrode and preserving other settings and non-empty directories.
 
 The npm CLI remains installed. Remove it separately:
 

@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import {
+  FEATURE_MANAGED_END,
+  FEATURE_MANAGED_START,
   install,
   MANAGED_END,
   MANAGED_START,
@@ -34,6 +36,7 @@ test("global install preserves existing config", async () => {
   assert.match(config, /model = "example"/);
   assert.match(config, new RegExp(MANAGED_START));
   assert.match(config, /\[\[hooks\.UserPromptSubmit\]\]/);
+  assert.match(config, /\[features\]\ndefault_mode_request_user_input = true/);
 });
 
 test("global install creates the default Codex home when absent", async () => {
@@ -98,6 +101,131 @@ test("repeat install updates receipt-owned files", async () => {
   assert.match(await readFile(skill, "utf8"), /name: csx-plan/);
   const config = await readFile(join(root, ".codex", "config.toml"), "utf8");
   assert.equal(config.split(MANAGED_START).length - 1, 1);
+  assert.equal(config.split(FEATURE_MANAGED_START).length - 1, 1);
+});
+
+test("repeat install upgrades a receipt from before feature management", async () => {
+  const root = await temporary("old receipt ");
+  const configPath = join(root, ".codex", "config.toml");
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  await install({ scope: "project", projectRoot: root });
+
+  const featureRegion = new RegExp(
+    `\\n*${escapeRegExp(FEATURE_MANAGED_START)}[\\s\\S]*?${escapeRegExp(FEATURE_MANAGED_END)}\\n?`
+  );
+  await writeFile(configPath, (await readFile(configPath, "utf8")).replace(featureRegion, "\n"));
+  const oldReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  delete oldReceipt.featureConfig;
+  await writeFile(receiptPath, `${JSON.stringify(oldReceipt, null, 2)}\n`);
+
+  await install({ scope: "project", projectRoot: root });
+
+  const upgraded = await readFile(configPath, "utf8");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.match(upgraded, new RegExp(FEATURE_MANAGED_START));
+  assert.equal(receipt.featureConfig.key, "default_mode_request_user_input");
+  assert.equal(receipt.featureConfig.previousLine, null);
+});
+
+test("install preserves an existing features table and uninstall removes only the managed key", async () => {
+  const root = await temporary("existing features ");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(
+    join(root, ".codex", "config.toml"),
+    "model = \"example\"\n\n[features]\napps = false # keep this\n"
+  );
+
+  await install({ scope: "project", projectRoot: root });
+
+  const installed = await readFile(join(root, ".codex", "config.toml"), "utf8");
+  assert.match(installed, /apps = false # keep this/);
+  assert.match(installed, new RegExp(FEATURE_MANAGED_START));
+  assert.match(installed, /default_mode_request_user_input = true/);
+
+  await uninstall({ projectRoot: root });
+
+  const removed = await readFile(join(root, ".codex", "config.toml"), "utf8");
+  assert.match(removed, /\[features\]\napps = false # keep this/);
+  assert.doesNotMatch(removed, /default_mode_request_user_input/);
+  assert.match(removed, /model = "example"/);
+});
+
+test("install reversibly overrides an explicit false feature across repeat installs", async () => {
+  const root = await temporary("false feature ");
+  const configPath = join(root, ".codex", "config.toml");
+  const original = [
+    "model = \"example\"",
+    "",
+    "[features]",
+    "default_mode_request_user_input = false # user preference",
+    "apps = true",
+    ""
+  ].join("\n");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(configPath, original);
+
+  await install({ scope: "project", projectRoot: root });
+  await install({ scope: "project", projectRoot: root });
+
+  const installed = await readFile(configPath, "utf8");
+  assert.match(installed, /default_mode_request_user_input = true/);
+  assert.doesNotMatch(installed, /false # user preference/);
+  const receipt = JSON.parse(await readFile(join(root, ".codex", ".csx-install-receipt.json"), "utf8"));
+  assert.equal(
+    receipt.featureConfig.previousLine,
+    "default_mode_request_user_input = false # user preference"
+  );
+
+  await uninstall({ projectRoot: root });
+
+  const restored = await readFile(configPath, "utf8");
+  assert.match(restored, /default_mode_request_user_input = false # user preference/);
+  assert.match(restored, /apps = true/);
+  assert.doesNotMatch(restored, new RegExp(FEATURE_MANAGED_START));
+});
+
+test("an existing true feature stays user-owned after uninstall", async () => {
+  const root = await temporary("true feature ");
+  const configPath = join(root, ".codex", "config.toml");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(configPath, "[features]\ndefault_mode_request_user_input = true # mine\n");
+
+  await install({ scope: "project", projectRoot: root });
+  const installed = await readFile(configPath, "utf8");
+  assert.doesNotMatch(installed, new RegExp(FEATURE_MANAGED_START));
+
+  await uninstall({ projectRoot: root });
+  assert.match(
+    await readFile(configPath, "utf8"),
+    /default_mode_request_user_input = true # mine/
+  );
+});
+
+test("unsupported inline features fail before payload writes", async () => {
+  const root = await temporary("inline features ");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(
+    join(root, ".codex", "config.toml"),
+    "features = { default_mode_request_user_input = false }\n"
+  );
+
+  await assert.rejects(
+    install({ scope: "project", projectRoot: root }),
+    /cannot safely manage default_mode_request_user_input in inline features table/
+  );
+  assert.equal(existsSync(join(root, ".agents")), false);
+});
+
+test("broken feature markers fail before payload writes", async () => {
+  const root = await temporary("broken feature markers ");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(join(root, ".codex", "config.toml"), `${FEATURE_MANAGED_START}\n`);
+
+  await assert.rejects(
+    install({ scope: "project", projectRoot: root }),
+    /broken csx feature default_mode_request_user_input markers/
+  );
+  assert.equal(existsSync(join(root, ".agents")), false);
 });
 
 test("unmanaged destination and unmanaged agent table fail before payload writes", async () => {
@@ -170,4 +298,8 @@ async function temporary(prefix) {
   const root = await mkdtemp(join(tmpdir(), `csx-${prefix}`));
   roots.push(root);
   return resolve(root);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

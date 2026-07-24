@@ -17,10 +17,21 @@ Use this skill to produce a practical plan that another Codex turn can execute w
 
 1. Read the spec and user request.
 2. Spawn `csx-explorer` to gather repository conventions, affected boundaries, and verification commands.
-3. Give the evidence packet to `csx-planner` and ask it for the smallest viable implementation path, sequencing, risks, and stop conditions.
-4. For broad, risky, or cross-module work, give the draft to `csx-critic` to challenge scope, sequencing, and verification.
-5. Reconcile the returned evidence and criticism in the main context. Define verification before implementation details.
-6. Write `.csx/plans/<slug>.md` for multi-step work.
+3. In the root thread, resolve any remaining user-owned decisions that would change the plan.
+4. Give the evidence packet and user decisions to `csx-planner` and ask it for the smallest viable implementation path, sequencing, risks, and stop conditions.
+5. For broad, risky, or cross-module work, give the draft to `csx-critic` to challenge scope, sequencing, and verification.
+6. Reconcile the returned evidence and criticism in the main context. Define verification before implementation details.
+7. Write `.csx/plans/<slug>.md` for multi-step work.
+
+## Root User Decisions
+
+When step 3 finds unresolved preferences or tradeoffs, call `request_user_input` from the root thread.
+
+- Ask 1-3 material questions, each with 2-3 mutually exclusive options.
+- Put the recommended option first and suffix its label with `(Recommended)`.
+- Preserve user notes as plan constraints and pass them to the planner and critic.
+- Do not ask about facts the explorer can discover, and do not call the tool when the request is already decision-ready.
+- Never delegate this tool call to a sub-agent. Fall back to a direct text question if the tool is unavailable.
 
 ## Review Policy
 

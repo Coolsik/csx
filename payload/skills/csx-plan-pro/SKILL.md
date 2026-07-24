@@ -14,21 +14,33 @@ Produce one decision-ready plan with independent review pressure. Do not start i
 ## Workflow
 
 1. Spawn `csx-explorer` for repository evidence and `csx-analyst` for requirement gaps. Run them in parallel when independent.
-2. Give both evidence packets to `csx-planner` for the first draft.
-3. Spawn `csx-architect` first. It must provide:
+2. In the root thread, resolve user-owned decisions exposed by those evidence packets.
+3. Give both evidence packets and user decisions to `csx-planner` for the first draft.
+4. Spawn `csx-architect` first. It must provide:
    - strongest counterargument against the favored path
    - hidden coupling or boundary risk
    - at least one tradeoff tension
    - `CLEAR`, `WATCH`, or `BLOCK`
-4. After the Architect result returns, spawn `csx-critic` with the draft and that result. It checks:
+5. After the Architect result returns, spawn `csx-critic` with the draft and that result. It checks:
    - missing acceptance criteria
    - unsafe sequencing
    - weak verification
    - unresolved architect concerns
    - unnecessary complexity
-5. Ask `csx-planner` to revise after each review pair.
-6. Repeat the sequential Architect then Critic review until no blockers remain, capped at maximum 5 review cycles.
-7. Write `.csx/plans/<slug>-pro.md` only after Architect `CLEAR` and Critic `APPROVED`. Mark `BLOCKED` after 5 cycles or any unresolvable blocker.
+6. If either review exposes a new user-owned decision, resolve it in the root thread before revision.
+7. Ask `csx-planner` to revise after each review pair, including any new user decision.
+8. Repeat the sequential Architect then Critic review until no blockers remain, capped at maximum 5 review cycles.
+9. Write `.csx/plans/<slug>-pro.md` only after Architect `CLEAR` and Critic `APPROVED`. Mark `BLOCKED` after 5 cycles or any unresolvable blocker.
+
+## Root User Decisions
+
+For steps 2 and 6, call `request_user_input` from the root thread only when a preference or tradeoff belongs to the user.
+
+- Ask 1-3 material questions, each with 2-3 mutually exclusive options.
+- Put the recommended option first and suffix its label with `(Recommended)`.
+- Preserve user notes as plan constraints and pass them through planner, architect, and critic reviews.
+- Never delegate this tool call to a sub-agent.
+- Fall back to a direct text question if the tool is unavailable.
 
 ## Token Budget
 
