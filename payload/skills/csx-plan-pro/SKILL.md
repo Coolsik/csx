@@ -11,31 +11,48 @@ Use this skill when ordinary planning is not enough, but a full external orchest
 
 Produce one decision-ready, versioned plan with independent review pressure. Consensus exists only when Architect and Critic approve the same draft version. Do not start implementation unless the user explicitly selects the final `$csx-start-goal` handoff.
 
+The skill owns role sequencing, user decisions, assignment construction, version state, consensus routing, artifact persistence, and handoff. `csx-explorer` owns repository facts, `csx-analyst` owns requirement gaps and readiness, `csx-planner` owns every draft, `csx-architect` owns architectural review, and `csx-critic` owns actionability review. The root must not substitute its own specialist judgment or rewrite a reviewed draft.
+
+Every subagent assignment must state:
+
+```text
+Objective:
+Inputs:
+Scope:
+Required work/checks:
+Expected deliverable:
+Required verdict or vocabulary:
+Constraints:
+Stop conditions:
+```
+
 ## Workflow
 
-1. Spawn `csx-explorer` for repository evidence and `csx-analyst` for requirement gaps. Run them in parallel when independent.
-2. Route the Analyst result before drafting:
+1. Establish the requirements input:
+   - If an accepted final csx spec is supplied, treat its scope, non-goals, constraints, acceptance criteria, decisions, readiness, and evidence packet as binding. Reuse current evidence instead of repeating discovery. For brownfield work, call `csx-explorer` only to revalidate affected claims when the repository changed or material evidence may be stale. Call `csx-analyst` only if that revalidation exposes a material conflict or new plan-changing gap.
+   - Without an accepted spec, spawn `csx-explorer` for brownfield repository evidence and then pass its completed packet with the request to `csx-analyst`. For repository-independent greenfield work, Explorer may be omitted and Analyst may start directly. Run lanes in parallel only when the Analyst judgment does not depend on repository evidence.
+2. Route the accepted spec status or latest Analyst result before drafting:
    - `READY`: continue.
    - `READY_WITH_ASSUMPTIONS`: preserve every reversible assumption in the decision ledger and continue.
-   - `BLOCKED`: resolve user-owned decisions in the root thread. If the blocker cannot be resolved, write a BLOCKED artifact and skip Planner, Architect, and Critic.
-3. In the root thread, resolve user-owned decisions exposed by the evidence packets. Record user-confirmed decisions, reversible assumptions, and open decisions separately.
-4. Give both evidence packets and user decisions to `csx-planner`. Ask for `draft_version: 1`, a Decision Record, the implementation plan, acceptance criteria, a Verification Matrix, risks, and stop conditions.
-5. Spawn `csx-architect` with the exact draft version. It must echo that version and provide:
+   - `BLOCKED`: resolve user-owned decisions in the root thread. If the blocker cannot be resolved, write a pre-draft BLOCKED artifact and skip Planner, Architect, and Critic. In the Output envelope set Approved Version to `N/A`, Planner Body to `Not created — blocked before drafting`, both review sections to `Not run — blocked before drafting`, and record the exact Analyst blockers.
+3. In the root thread, resolve user-owned decisions exposed by the Analyst. After an answer, resume the same Analyst when possible, or spawn a fresh Analyst with the complete request, evidence, prior result, and answer. Use the replacement readiness result; do not rescore requirements in the root.
+4. Give the accepted requirements, evidence packets, latest Analyst result when one was required, and user decisions to `csx-planner`. The Planner assignment must require `draft_version: 1`, the exact Planner Body Shape below, the Decision Record, implementation plan, acceptance criteria, Verification Matrix, risks, stop conditions, and deliberate content when applicable.
+5. Spawn `csx-architect` with the complete exact draft and version. Its assignment must require it to echo that version and provide:
    - strongest counterargument against the favored path
    - hidden coupling or boundary risk
    - at least one tradeoff tension
    - `CLEAR`, `WATCH`, or `BLOCK`
-6. After the Architect result returns, spawn `csx-critic` with the same draft version and the Architect result. It must echo that version, verify referenced files and symbols, simulate two representative implementation steps against the repository, and issue `APPROVED`, `REVISE`, or `BLOCKED`.
+6. After the Architect result returns, spawn `csx-critic` with the original request or input spec, user decisions, same complete draft, version, evidence, and Architect result. Its assignment must require the same version, verification of referenced files and symbols, simulation of two representative implementation steps, explicit reconciliation of the draft against original intent and decisions, and exactly one `APPROVED`, `REVISE`, or `BLOCKED` verdict. For `REVISE` or architectural `WATCH`/`BLOCK`, require one `Revision Brief` that reconciles both reviews, preserves every material blocker, identifies conflicting recommendations, and either gives the Planner an unambiguous correction or marks the unresolved user decision `BLOCKED`.
 7. Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same `draft_version`. A missing or mismatched version is not consensus.
 8. Route every non-consensus result back through a complete review cycle:
    - Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`, or an accepted material improvement requires revision.
    - Resolve any new user-owned decision in the root thread before revision.
-   - Resume the same `csx-planner` when possible with consolidated feedback and increment `draft_version` by exactly one.
-   - If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, prior draft, and feedback; record the fallback in the Review Ledger.
+   - Resume the same `csx-planner` when possible with the exact prior draft, Critic-owned `Revision Brief`, user decisions, and instruction to increment `draft_version` by exactly one. The root must not synthesize or reinterpret specialist feedback.
+   - If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, prior draft, and exact `Revision Brief`; record the fallback in the Review Ledger.
    - Run a fresh Architect review followed by a fresh Critic review for the new version.
 9. Repeat until consensus or a maximum of 5 review cycles. An unresolvable blocker or failure to reach consensus after cycle 5 produces a BLOCKED artifact containing the best draft and unresolved blockers.
-10. Before finalization, compare the consensus draft with the original request, input spec, and user decisions. If the plan introduces a conflicting assumption or open decision that can change implementation, reconcile it with the user and start a new versioned review cycle.
-11. Write `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`. The approved plan body must be the exact body reviewed in the consensus cycle; the root may append review provenance and handoff metadata.
+10. Before finalization, require the final Critic result to confirm that the consensus draft matches the original request, input spec, and user decisions. If it reports a conflicting assumption or open decision that can change implementation, reconcile it with the user and start a new versioned review cycle.
+11. Write `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`. Place the exact Planner body reviewed in the consensus cycle inside the artifact envelope without modification. Append the exact Architect and Critic results, Review Ledger, and handoff as provenance outside that immutable body.
 
 ## Material Change Rule
 
@@ -43,7 +60,7 @@ Any post-review change to scope, boundaries, approach, sequence, acceptance crit
 
 ## Decision Record
 
-Every draft must include:
+Every Planner assignment must require:
 
 ```markdown
 ## Decision Record
@@ -63,13 +80,13 @@ Every draft must include:
 ### Follow-ups
 ```
 
-Include at least two viable options with bounded tradeoffs. If only one option remains viable, include explicit invalidation rationale for the rejected alternatives.
+Require at least two viable options with bounded tradeoffs. If only one option remains viable, require explicit invalidation rationale for the rejected alternatives.
 
 ## Deliberate Profile
 
 Auto-enable deliberate planning when the request involves authentication or authorization, security, data or schema migration, destructive or irreversible changes, incident recovery, compliance or PII, public API breakage, or concurrency/distributed state. Also enable it when the user explicitly requests deliberate or high-risk planning.
 
-A deliberate draft must include:
+When the deliberate profile is active, the Planner assignment must require:
 
 - three concrete failure scenarios
 - prevention, detection, and containment or rollback for each scenario
@@ -77,7 +94,7 @@ A deliberate draft must include:
 - compatibility, permissions, or data-integrity checks relevant to the task
 - execution stop conditions and recovery confirmation
 
-Architect must review boundary, threat, compatibility, and rollback risk. Critic must reject a missing or weak deliberate section.
+The Architect assignment must review boundary, threat, compatibility, and rollback risk. The Critic assignment must return `REVISE` or `BLOCKED` for a missing or weak deliberate section.
 
 ## Root User Decisions
 
@@ -98,16 +115,14 @@ For initial decisions, review-exposed decisions, and final intent reconciliation
 - Skip lanes only when the task is already narrow and non-architectural; then use `csx-plan`.
 - If any required role is unavailable, ask the user to rerun `csx install` for the intended scope and write `BLOCKED: required independent role unavailable`.
 
-## Output
+## Planner Body Shape
+
+The Planner owns and returns this complete immutable body:
 
 ```markdown
-# Pro Plan: <title>
+# Plan: <title>
 
-## Decision
-APPROVED / BLOCKED
-
-## Approved Version
-draft_version: <N or N/A>
+draft_version: <N>
 
 ## Decisions and Assumptions
 ### User-confirmed Decisions
@@ -129,10 +144,27 @@ draft_version: <N or N/A>
 
 ## Deliberate Review
 Included when deliberate profile is active.
+```
+
+## Output
+
+```markdown
+# Pro Plan: <title>
+
+## Decision
+APPROVED / BLOCKED
+
+## Approved Version
+draft_version: <N or N/A>
+
+## Planner Body
+<exact Planner body for the approved or best draft version>
 
 ## Architect Review
+<exact result for that same version>
 
 ## Critic Review
+<exact result for that same version>
 
 ## Review Ledger
 | Cycle | Draft Version | Architect | Critic | Revision Reason |

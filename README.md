@@ -105,6 +105,13 @@ including `csx-deslop`, use explicit invocation rather than implicit routing.
 Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
 architect, critic, executor, verifier, and code-reviewer.
 
+Agent prompts define general, workflow-independent roles. Skills construct each
+subagent assignment with its objective, inputs, scope, required checks,
+deliverable, verdict vocabulary, constraints, and stop conditions. Skills own
+orchestration, user decisions, state, artifacts, and handoffs; agents own the
+assigned investigation, analysis, planning, implementation, verification, or
+review result.
+
 `csx-plan` and `csx-plan-pro` produce versioned planning artifacts under
 `.csx/plans/`. A revised draft must be reviewed again, and `csx-plan-pro`
 requires Architect `CLEAR` plus Critic `APPROVED` for the same draft version.
@@ -112,14 +119,15 @@ Both skills record verification evidence and finish with an explicit choice to
 refine, stop, or authorize execution through `csx-start-goal`; BLOCKED plans
 cannot enter execution.
 
-`csx-start-goal` creates one aggregate Codex goal for the accepted plan and
-tracks bounded `G001...Gnnn` execution goals in `.csx/goals/`. Non-trivial
-implementation is followed by scoped `csx-deslop` cleanup and the same
-verification. When all execution goals are ready, the complete cumulative diff
-must pass `csx-code-review`; failed findings return affected goals to rework and
-any later code change invalidates the earlier approval. The standalone
-`csx-verifier` agent remains installed for independent use, but it is not a
-completion dependency of `csx-start-goal`.
+`csx-start-goal` creates one aggregate Codex goal for the accepted plan and asks
+the Planner to split it into bounded `G001...Gnnn` execution goals in
+`.csx/goals/`. Executors own all implementation and rework. The root invokes
+scoped `csx-deslop` cleanup after implementation rather than asking a leaf
+Executor to start another workflow. `csx-verifier` independently gates scoped
+goal evidence and the integrated cumulative acceptance claim. When all
+execution goals are ready, the unchanged complete diff must also pass
+`csx-code-review`; failed evidence or findings return affected goals to rework,
+and any later code change invalidates the earlier verification and approval.
 
 ## Uninstall
 

@@ -7,6 +7,23 @@ description: Execute an explicitly accepted spec or plan as one durable aggregat
 
 Execute an accepted input with one Codex goal and a Markdown control artifact. Keep the goal active until the complete accepted plan is implemented, every original acceptance criterion has evidence, required cleanup and verification have passed, and the unchanged cumulative diff receives final approval.
 
+## Orchestration Boundary
+
+The skill owns execution authority, aggregate goal state, assignment construction, dependency scheduling, artifact persistence, rework routing, review invalidation, and final completion. `csx-planner` owns execution-goal decomposition, `csx-executor` owns implementation and rework, `csx-verifier` owns scoped and integrated completion evidence, and `$csx-code-review` owns cumulative change review. The root must not plan, implement, clean, verify, or review a delegated slice itself.
+
+Every subagent assignment must state:
+
+```text
+Objective:
+Inputs:
+Scope:
+Required work/checks:
+Expected deliverable:
+Required verdict or vocabulary:
+Constraints:
+Stop conditions:
+```
+
 ## Entry Gate
 
 1. Confirm current-turn execution authority.
@@ -33,6 +50,12 @@ Create or resume `.csx/goals/<slug>.md`. Treat it as the source of truth for exe
 ## Accepted Boundaries
 <scope, non-goals, constraints, decisions, assumptions, risks, stop conditions>
 
+## Change Revision
+Current: R000
+
+| Revision | Cause | Changed Files | Invalidated Evidence |
+| --- | --- | --- | --- |
+
 ## Success Outcomes
 ### O1: <optional outcome>
 - [ ] AC1: <original acceptance criterion, preserved verbatim>
@@ -42,7 +65,8 @@ Create or resume `.csx/goals/<slug>.md`. Treat it as the source of truth for exe
 ## Execution Goals
 ### G001: <bounded implementation result>
 - Dependencies: none | Gnnn
-- Owner: leader | csx-executor:<task-name>
+- Owner: csx-executor:<task-name>
+- Ownership history: <revision, owner, and any sequential handoff>
 - Files: <implementation files and corresponding tests>
 - Criteria: AC1, AC2
 - Verification: <exact commands or scenarios>
@@ -55,7 +79,7 @@ Create or resume `.csx/goals/<slug>.md`. Treat it as the source of truth for exe
 
 ## Review Iterations
 ### Review 1
-<review input revision, lane verdicts, final verdict, findings mapped to goals>
+<change_revision, lane verdicts, final verdict, findings mapped to goals>
 
 ## Completion Decision
 <criterion evidence audit, final approval revision, and whether later code changes occurred>
@@ -70,67 +94,84 @@ Create or resume `.csx/goals/<slug>.md`. Treat it as the source of truth for exe
 
 ## Define Execution Goals
 
-1. Split the accepted plan into `G001...Gnnn` bounded implementation results. Record dependencies, owner, exact file ownership, corresponding tests, mapped criteria, verification, and stop conditions before work starts.
-2. Use these state transitions:
+1. Confirm `csx-planner`, `csx-executor`, and `csx-verifier` are available. If a required role is missing, keep the aggregate goal active, record `blocked: required role unavailable`, and ask the user to rerun `csx install`.
+2. Assign `csx-planner` the accepted spec or plan, approved version, boundaries, decisions, assumptions, risks, stop conditions, every original acceptance criterion, and the Verification Matrix. Require a complete `G001...Gnnn` execution breakdown containing:
+   - one bounded implementation result per goal;
+   - dependencies;
+   - exact file ownership and corresponding tests, with no simultaneous ownership overlap;
+   - an explicit ordered ownership handoff for any file that sequential goals must both change;
+   - mapped acceptance-criterion identifiers without omission or weakening;
+   - exact verification commands or scenarios, expected results, and failure signals;
+   - goal-specific stop conditions;
+   - identified ownership or dependency blockers.
+3. If a material criterion is unmapped, ownership overlaps without sequencing, or the Planner reports a blocker, send the exact defect back to the Planner for one corrected replacement breakdown. If the correction still fails or requires a user decision, keep the goal active and ask the user; do not repair the decomposition in the root.
+4. Persist the accepted Planner breakdown in the goal artifact, assign stable `G001...Gnnn` identifiers, and use these state transitions:
    - Normal: `pending -> in_progress -> ready_for_review -> complete`
-   - Review failure: `ready_for_review -> rework -> in_progress -> ready_for_review`
-3. Do not mark an execution goal `complete` during implementation. Hold all successfully implemented goals at `ready_for_review` until the final cumulative review passes.
-4. Run independent goals in parallel only when they have no dependency and no overlapping file ownership. Run dependent goals and goals touching the same files sequentially.
+   - Code-changing review failure: `ready_for_review -> rework -> in_progress -> ready_for_review`
+   - Evidence-only invalidation after another goal owns the fix: `ready_for_review -> rework -> ready_for_review`
+5. Do not mark an execution goal `complete` during implementation. Hold all successfully implemented goals at `ready_for_review` until independent verification and the final cumulative review pass.
+6. A dependency is satisfied for execution when every prerequisite is `ready_for_review` with non-invalidated scoped evidence; never wait for `complete`, which is reserved for final completion. Run independent goals in parallel only when the Planner breakdown gives them no dependency and no overlapping file ownership. Run dependent goals and goals touching the same files sequentially.
+7. Maintain one active owner per path. A dependent goal may take ownership of a shared path only through the Planner-recorded handoff after the prior owner reaches `ready_for_review`. Do not assign the prior owner that path again unless a fresh Planner correction explicitly reassigns it.
 
-## Choose the Implementer
+## Change Revisions and Evidence Validity
 
-The leader may implement a goal directly only when all of these are demonstrably true:
+- Initialize `change_revision` as `R000` before implementation and increment it monotonically after every returned change to implementation, tests, configuration, generated source, or documentation.
+- Record each revision's cause, changed files, and invalidated evidence in the goal artifact. Tag implementation, deslop, scoped verification, integrated verification, and code-review evidence with the revision whose state it inspected.
+- Require every Verifier and code-review result to echo its assigned `change_revision`. A missing or mismatched revision is stale evidence and cannot pass.
+- Any code change invalidates the prior integrated Verifier result and cumulative code-review result.
+- Also invalidate scoped Verifier and deslop evidence for every goal whose owned files changed, whose mapped criteria changed, or whose dependency behavior may be affected. Move each affected goal to `rework` or `in_progress`. The current code owner reruns implementation verification and deslop for every changed path; evidence-only affected goals consume that shared final-revision deslop report and rerun scoped verification instead of repeating cleanup under an obsolete owner.
+- Evidence for an unrelated goal remains valid only when its files, mapped criteria, and dependency behavior are unchanged. Record that impact decision in the revision history instead of assuming it silently.
 
-- The change is small and local, with unambiguous behavior and edit scope.
-- It affects no public API, schema, security, concurrency, migration, dependency, or architecture boundary.
-- It requires no coordination across modules.
-- One focused verification can prove the result.
+## Assign Implementation
 
-If any condition is false or uncertain, assign the bounded goal to `csx-executor`. For every executor assignment, provide:
+Always assign every implementation and code-changing rework goal to `csx-executor`. Evidence-only revalidation is not an implementation assignment and remains owned by `csx-verifier`. A clear local edit that does not need workflow orchestration should be implemented outside this skill rather than by a root fast path. For every Executor assignment, provide:
 
 - owned implementation files and corresponding test files;
 - mapped acceptance criteria and expected evidence;
-- exact initial and post-deslop verification commands or manual scenarios;
+- exact targeted verification commands or manual scenarios, expected results, and failure signals;
 - dependency state and explicit stop conditions;
+- the accepted boundaries, relevant repository evidence, and current goal artifact state;
 - the instruction that other work may coexist in the worktree and must not be reverted.
 
-The leader may skip deslop only for a directly authored, low-risk documentation or wording-only change. If implementation code exceeds the leader boundary, reassign it instead of expanding direct ownership.
+The Executor must not invoke another skill or subagent. It implements only the assigned slice and returns its requested result packet.
 
 ## Implement, Deslop, and Prepare Review
 
 For each execution goal:
 
 1. Set the state to `in_progress`.
-2. Implement the smallest change within the recorded ownership.
-3. Run the assigned initial verification and record fresh results against the mapped criteria.
-4. For every non-trivial implementation goal, invoke `$csx-deslop` after initial verification. Limit it to that goal's owned changed files and corresponding tests.
-5. Require `$csx-deslop` to lock existing behavior, report either cleanup or a passed/no-op result, and run the same verification after cleanup.
-6. Record changed files, removed smells or no-op reason, post-deslop verification, evidence, and residual risk.
-7. Set the state to `ready_for_review` only when implementation, required deslop, and post-deslop verification all pass. Return boundary-changing cleanup proposals or unresolved failures to the leader as blockers.
-
-Review the diff and evidence from each executor before accepting its goal as `ready_for_review`.
+2. Spawn `csx-executor` with the complete assignment above. Require status, changed files, addressed criteria, decisions, commands and results, assumptions, conflicts, blockers, and residual risk.
+3. Check the result packet for the required fields, owned-file compliance, and passing assigned verification. If it is incomplete or failing but recoverable inside the same assignment, return the exact defect to the same Executor when possible for one bounded retry. If the retry fails, the Executor is blocked, or recovery needs a user decision or wider ownership, record the exact blocker and keep the aggregate goal active; do not independently fix it or retry indefinitely.
+4. For every non-trivial implementation goal, invoke `$csx-deslop` from the root with the current `change_revision`, that goal's owned changed files, corresponding tests, accepted behavior, passing targeted verification, current diff, and stop conditions. Authorize the Deslop orchestration to increment and record one new parent revision after returned cleanup changes and before its Verifier call. The Executor must not invoke it.
+5. Accept only a `$csx-deslop` `passed/cleaned` or `passed/no-op` result backed by `csx-verifier: PASS` that echoes the artifact's current `change_revision`. A low-risk documentation or wording-only goal may record `deslop: not applicable` with rationale.
+6. After implementation and cleanup, assign `csx-verifier` the current `change_revision`, goal's mapped criteria, final owned diff, exact verification, expected result, failure signal, and all current evidence. Require it to echo that revision and return `PASS`, `PARTIAL`, or `FAIL` with a criterion evidence matrix.
+7. Record changed files, implementation evidence, deslop result, scoped Verifier verdict, evidence, and residual risk.
+8. Set the state to `ready_for_review` only when implementation verification passes, required deslop passes, and the scoped Verifier returns `PASS`. Route `PARTIAL` or `FAIL` to rework or blocker handling rather than overriding the verdict.
 
 ## Cumulative Review Loop
 
 Begin final review only when every execution goal is `ready_for_review`.
 
-1. Run fresh integrated verification over the cumulative change and update the artifact.
-2. Invoke `$csx-code-review` with:
+1. Assign `csx-verifier` the current `change_revision`, entire accepted input, every original acceptance criterion, the complete cumulative diff, all goal evidence, integrated commands or scenarios, expected results, and failure signals. Require it to echo that revision, perform fresh integrated verification, and return a criterion-by-criterion `PASS`, `PARTIAL`, or `FAIL` evidence matrix.
+2. Continue only on integrated `PASS`. Map `PARTIAL` or `FAIL` evidence gaps to affected goals and move them to `rework`; do not begin code review on an unproven cumulative state.
+3. Invoke `$csx-code-review` with:
+   - the current `change_revision`, which every required lane and the composite result must echo;
    - the accepted plan/spec and every original acceptance criterion;
    - the goal artifact and criterion-to-evidence mapping;
    - the entire cumulative diff;
-   - all post-deslop and integrated verification results.
-3. Treat a substantial diff as passed only when all three results are present:
+   - all scoped, post-deslop, and integrated Verifier results.
+4. Treat a substantial diff as passed only when all three results are present:
    - `csx-code-reviewer: APPROVE`
    - `csx-architect: CLEAR`
    - final `Verdict: APPROVE`
-4. A trivial diff may use the code-review fast path, but still requires final `Verdict: APPROVE`.
-5. Treat `COMMENT`, `WATCH`, `REQUEST CHANGES`, `BLOCK`, a missing required lane, or any final verdict other than `APPROVE` as a failure.
-6. Map every finding to affected acceptance criteria and execution goals. Move affected goals to `rework`, then assign every rework fix to `csx-executor` with bounded ownership, evidence, verification, and stop conditions.
-7. Advance each affected goal through `rework -> in_progress -> ready_for_review`. Re-run scoped deslop and post-deslop verification for every changed implementation scope, then re-run integrated verification and `$csx-code-review` on the entire cumulative diff.
-8. Any code change after a review invalidates every earlier approval. Record the new diff revision and review iteration; never reuse an earlier verdict.
+5. A trivial diff may validly skip Architect under the code-review skill, but still requires `csx-code-reviewer: APPROVE`, integrated Verifier `PASS`, and final `Verdict: APPROVE`.
+6. Treat `COMMENT`, `WATCH`, `REQUEST CHANGES`, `BLOCK`, a missing required lane, or any final verdict other than `APPROVE` as a failure.
+7. Map every finding to affected acceptance criteria and execution goals. Move affected goals to `rework`, then assign every code-changing rework fix to `csx-executor` with bounded ownership, evidence, verification, and stop conditions. If a finding crosses current goal ownership or requires new files, send the finding, current artifact, and ownership history to `csx-planner` for a corrected decomposition and explicit ownership handoff; preserve stable goal and criterion identifiers where possible. Validate the replacement against the same criterion coverage, dependency, one-active-owner, handoff, verification, and stop-condition rules as the initial breakdown. Return one defective replacement to Planner for one correction; if it still fails or needs a user decision, keep the goal active and report the blocker. The root must not invent or repair the reassignment.
+8. The corrected breakdown must name one current code owner for every changed path and list every earlier goal whose scoped evidence that change invalidates. Run the code-changing goal through Executor and invoke `$csx-deslop` once with the union of invariants for the current owner and every evidence-only affected goal that depends on those paths. Attach its final-revision, path-and-invariant-mapped report to each affected goal as the replacement for invalidated prior deslop evidence. Do not hand the file back merely to refresh evidence. Then assign `csx-verifier` each evidence-only affected goal's criteria, current revision, final diff, shared deslop report, and exact verification; only `PASS` may return it from `rework` to `ready_for_review`.
+9. Advance each code-changing goal through `rework -> in_progress -> ready_for_review`, then re-run scoped Verifier checks for all affected goals, integrated Verifier checks, and `$csx-code-review` on the entire cumulative diff.
+10. Apply the Change Revisions and Evidence Validity rules after every rework change. Record the new revision and iteration; never reuse invalidated scoped, integrated, deslop, or review evidence.
 
-Repeat until the unchanged cumulative diff passes. If a finding requires a user decision or a change to the accepted plan, do not loop speculatively. Keep the aggregate goal active, record the blocker and affected goals, and ask the user for that decision.
+Repeat until the unchanged cumulative diff passes, up to 5 cumulative review iterations. Stop earlier when the same blocking finding survives two bounded repair attempts or an iteration produces no new evidence and no reduction in blocking findings. Keep the aggregate goal active, record the no-progress blocker and affected goals, and ask the user for direction. If a finding requires a user decision or a change to the accepted plan, do not loop speculatively; use the same blocker path.
 
 ## Complete
 
@@ -139,8 +180,10 @@ Before completion, audit that:
 - the entire accepted plan is implemented;
 - every original acceptance criterion has direct, current evidence;
 - every execution goal is `ready_for_review`;
-- required deslop or passed/no-op reports and post-deslop verification exist;
+- required deslop or passed/no-op reports and scoped Verifier `PASS` results exist;
+- the latest unchanged cumulative diff has integrated Verifier `PASS`;
 - the latest cumulative review passed under the applicable lane rules;
-- no code changed after that approval.
+- both results echo the current `change_revision`;
+- no code changed after that revision's approval.
 
 Only then change every execution goal to `complete`, write the final completion decision, and call `update_goal` with `complete` exactly once. Do not claim completion from memory or from an approval attached to an older diff.
