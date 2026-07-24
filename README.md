@@ -1,77 +1,94 @@
 # csx
 
-csx is a small Codex-native delegated workflow plugin. It bundles workflow skills and namespaced custom subagents for evidence gathering, planning, implementation, verification, and review.
+csx installs a small set of Codex-native workflow skills, custom agents, and an
+explicit prompt-routing hook. It has no runtime dependencies, background
+service, MCP server, or Codex plugin.
+
+## Requirements
+
+- Node.js 20 or newer
+- Codex on macOS, Linux, or Windows
 
 ## Install
 
-Use this repository as a local Codex marketplace. From the repository root:
+Install the public npm package, then choose where Codex should load csx:
 
 ```bash
-codex plugin marketplace add .
-codex plugin add csx@csx-local
+npm install -g @coolsik/csx
+csx install
 ```
 
-Then install the bundled agents into the current trusted project:
+The interactive command presents a numbered menu: `1` for `global` and `2` for
+`project`. Automation can select the scope explicitly:
 
-```text
-$csx:setup
+```bash
+csx install --scope global
+csx install --scope project
+csx install --scope project --project-root /path/to/workspace
 ```
 
-The setup skill copies the bundled TOML files to `.codex/agents/` and maintains their `[agents.csx-*]` registrations in `.codex/config.toml`. Start a new Codex thread afterward so the role roster reloads. No background service, MCP server, app, or external runtime is required.
+Global installation writes only below `${CODEX_HOME:-~/.codex}`. If
+`CODEX_HOME` is explicitly set, that directory must already exist.
+
+Project installation writes skills to `.agents/skills`, agents and hooks to
+`.codex`, and a managed block to `.codex/config.toml`. Without
+`--project-root`, csx installs into the directory where the command is run.
+Git is not required. Project installation never changes the global Codex home.
+
+csx refuses to overwrite same-name files unless its installation receipt proves
+they are managed by csx. Existing config outside the marked csx block is
+preserved. Start a new Codex session after installation. Codex will ask you to
+review and trust the command hook on first use.
 
 ## Skills
 
-| Skill | Use for | Output |
-| --- | --- | --- |
-| `setup` | Install and register the `csx-*` custom agents | `.codex/agents/*.toml`, `.codex/config.toml` |
-| `analyze` | Read-only repository explanation | Evidence-ranked answer |
-| `spec` | Turn vague intent into an actionable specification | `.csx/specs/<slug>.md` |
-| `plan` | Create a direct implementation plan | `.csx/plans/<slug>.md` |
-| `plan-pro` | Create a higher-rigor plan with a critic pass | `.csx/plans/<slug>-pro.md` |
-| `start-goal` | Track a multi-step task with criteria and evidence | `.csx/goals/<slug>.md` |
-| `code-review` | Review changes with findings first | `.csx/reviews/<slug>.md` |
-
-## Subagents
-
-| Role | Ownership |
-| --- | --- |
-| `csx-explorer` | Repository evidence and call-path mapping |
-| `csx-analyst` | Requirements and acceptance criteria |
-| `csx-planner` | Implementation sequencing and verification plan |
-| `csx-architect` | Boundaries, coupling, and design challenge |
-| `csx-critic` | Adversarial spec and plan review |
-| `csx-executor` | One bounded implementation slice |
-| `csx-verifier` | Independent completion evidence |
-| `csx-code-reviewer` | Correctness, security, tests, and maintainability |
-
-Read-only roles set `sandbox_mode = "read-only"`. The executor inherits the parent thread's sandbox and permissions. All csx roles are leaf agents and return evidence to the main coordinator instead of spawning grandchildren.
-
-## Design Contract
-
-- Use Codex plugin and skill behavior, native custom-agent TOML files, and ordinary workspace files.
-- Hooks are allowed only when they preserve install-and-use simplicity.
-- csx ships one plugin-scoped `UserPromptSubmit` hook at `hooks/hooks.json`. It only routes prompts that start with `$csx:<skill>` or `csx <skill>` to the matching skill context.
-- Do not add Stop, PostToolUse, MCP, app, background-service, or runner behavior unless a future workflow proves it is necessary.
-- Keep workflows short enough for repeated everyday use.
-- Preserve the highest-value gates: evidence, acceptance criteria, explicit uncertainty, review findings, and completion checks.
-- Install namespaced role files only through the bundled `setup` workflow; preserve existing files unless the user explicitly requests replacement.
-- Keep the main Codex thread as coordinator and artifact owner. Delegate bounded specialist work, wait for results, and independently verify returned evidence.
-- Do not require extra binaries, services, MCP servers, or background automation.
-- Keep optional cleanup and QA checks inside `start-goal` and `code-review` instead of adding extra skills.
-
-## First Use
-
-Ask Codex with the skill name:
+Invoke a skill directly with its installed name:
 
 ```text
-$csx:setup
-$spec clarify this feature idea
-$plan create an implementation plan for the spec
-$start-goal execute this plan with evidence
-$code-review review the current changes
-$csx:spec clarify this feature idea
+$csx-analyze explain this repository behavior
+$csx-spec clarify this feature idea
+$csx-plan create an implementation plan
+$csx-plan-pro plan this architecture-sensitive migration
+$csx-start-goal execute the accepted plan
+$csx-code-review review the current changes
 ```
 
-The `csx:` prefix is optional. It uses the bundled prompt hook when Codex hooks are enabled and trusted; direct skill invocation remains the baseline path. After setup, start a new thread before invoking delegated skills.
+The hook also recognizes prompts beginning with `csx analyze`, `csx spec`,
+`csx plan`, `csx plan-pro`, `csx start-goal`, or `csx code-review`. Ordinary
+natural-language prompts are not routed.
 
-Each stateful skill writes a small Markdown artifact under `.csx/` in the target workspace. If `.csx/` does not exist, Codex should create only the needed subfolder.
+Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
+architect, critic, executor, verifier, and code-reviewer.
+
+## Uninstall
+
+```bash
+csx uninstall
+```
+
+The command first checks the current directory for a receipt-backed project
+installation. If the current directory has no receipt, it removes the global
+installation. It deletes only receipt-owned files and the csx-managed config
+block, preserving other settings and non-empty directories.
+
+The npm CLI remains installed. Remove it separately:
+
+```bash
+npm uninstall -g @coolsik/csx
+```
+
+Older `csx-local` Codex plugin installations are not migrated automatically.
+Remove those separately with the Codex plugin command before or after installing
+this package.
+
+## Development
+
+```bash
+npm test
+npm run check
+npm pack --dry-run
+```
+
+## License
+
+MIT
