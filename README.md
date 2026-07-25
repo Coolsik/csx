@@ -64,24 +64,71 @@ csx setup
 
 `csx setup` is an interactive-only model configuration flow. It selects the
 receipt-backed project installation in the current directory when present;
-otherwise it configures the global installation. A project setup reads and
-writes only that receipt-backed project scope while using Low, Medium, or High.
-Saved global custom presets are read only after selecting that initial menu
-choice, and global preset storage is read only after the final effective matrix
-has changes you approve for saving. Model discovery still runs the active Codex
-app-server with its resolved `CODEX_HOME`. It obtains the available model and
-reasoning-effort pairs from that app-server, so a stale agent setting must be
-repaired before it can be applied.
+otherwise it configures the global installation. Agent and receipt changes stay
+within the selected project or resolved global `CODEX_HOME` scope. Saved presets
+are global: they can be used in either scope, but global preset metadata changes
+only when you approve saving one. The command accepts no arguments and requires
+interactive stdin and stdout. An unmanaged project Codex configuration is
+refused before the TUI opens or any setup write is attempted.
 
-Choose Low, Medium, High, a saved global custom preset, or Edit current matrix;
-then select any agent row to change its model and effort before reviewing the
-exact per-field diff and selected scope root. Low and Medium use the explicit
-csx role mapping. High reflects the currently bundled agent definitions. A
-confirmed effective matrix with selected changes can be saved as a global
-preset; preset names must be unique. Setup writes only selected receipt-owned
-agent files, plus the complete effective-agent-matrix receipt and approved
-global-preset metadata, in one transaction; it rolls back all selected changes
-on failure.
+On a normal-sized terminal, the first screen is `Current 8-role matrix:`, with a
+`Model` and `Reasoning` pair for each role, followed by `Presets:` containing
+Low, Medium, High, every saved global custom preset, and Edit current. Low and
+Medium use the explicit csx role mapping; High reflects the bundled agent
+definitions. Saved entries carry `[custom]`, while the synthesized Edit current
+entry carries `[current]`; therefore a custom preset named Edit current remains
+valid and visually distinct. `[active]` appears only when all eight pairs
+exactly match a preset. If built-in and custom presets have the same complete
+matrix, every match is marked active.
+
+Use ↑/↓ and Enter to open a preset `detail:` screen. Its eight rows are followed
+by Edit, Apply, and Cancel. Edit is available from Low, Medium, High, every
+custom preset, and Edit current; use ↑/↓ to focus each role's `Model:` or
+`Reasoning:`, ←/→ to change it, and `Continue to diff` to review changes. In
+`Review selected changes:`, Enter includes or excludes an ordinary changed role
+before `Continue`. Detail Apply skips editing and also proceeds to this review;
+it does not write. A stale catalog-invalid pair must first be changed to an
+available pair; its `[mandatory repair]` diff cannot be excluded. Esc returns
+from detail, edit, or review screens, while Esc on the top-level preset list and
+Cancel exit without applying. Mouse input is not part of this interface.
+
+After diff selection, `Save this full matrix as a global custom preset?` appears
+only if the final matrix differs from the current matrix. Custom names must be
+non-empty, unique ignoring case, and not reserved. `Final setup preview:` shows
+the selected result and offers Apply or Cancel. Apply is the only action that
+persists anything; Cancel, top-level Esc, and Ctrl+D write nothing. Ctrl+D
+reports `Aborted with Ctrl+D.` and exits with an error after restoring the
+terminal. Other input or rendering errors and termination signals also restore
+the terminal before preserving their error or signal outcome. At supported
+terminal heights of at least 3 rows, list, detail, edit,
+`Review selected changes:`, `Final setup preview:`, and custom-name or
+inline-error content switch to focused paging when wrapped content exceeds the
+viewport. ↑/↓ reaches every wrapped suffix and each
+`Continue`, Apply, or Cancel action. `[custom]`, `[current]`, and `[active]`
+remain whole markers even when long preset names page at normal height. Enter
+on a final-preview value page does nothing; only Enter on a focused Apply or
+Cancel action triggers that action. During resize, the semantic item and page
+are retained where possible, with the page clamped when the resized viewport
+has fewer pages; every page remains reachable without a crash.
+
+Backslashes and terminal control or bidirectional-formatting characters loaded
+from saved custom presets or the model catalog keep their raw storage,
+selection, and Apply values. Only their screen representation changes, using
+reversible `\\`, `\xNN`, or `\uNNNN` visible escapes. The same
+presentation-only escaping covers dynamic top-level CLI stdout and stderr,
+without changing underlying values, errors, or payloads.
+
+Before commit, setup validates the final pairs against a freshly discovered
+Codex app-server catalog and rejects agent or custom-preset drift. Receipt
+metadata drift is reconciled without rewriting unchanged agent files. Setup
+writes only selected receipt-owned agent files, the complete effective-matrix
+receipt when needed, and approved global custom-preset metadata in one
+transaction. Validation errors write nothing, and any transactional failure
+rolls back the selected changes before the error is reported. If the agent
+matrix and receipt already match and no custom save was requested, it reports
+`Setup already matches the selected matrix.` without writing agent files.
+Hostile text in Apply-time fresh-catalog drift is escaped only after terminal
+cleanup, and the rejected operation commits nothing.
 
 ## Skills
 

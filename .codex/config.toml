@@ -1,0 +1,33 @@
+# >>> csx managed >>>
+[agents.csx-analyst]
+config_file = "./agents/csx-analyst.toml"
+
+[agents.csx-architect]
+config_file = "./agents/csx-architect.toml"
+
+[agents.csx-code-reviewer]
+config_file = "./agents/csx-code-reviewer.toml"
+
+[agents.csx-critic]
+config_file = "./agents/csx-critic.toml"
+
+[agents.csx-executor]
+config_file = "./agents/csx-executor.toml"
+
+[agents.csx-explorer]
+config_file = "./agents/csx-explorer.toml"
+
+[agents.csx-planner]
+config_file = "./agents/csx-planner.toml"
+
+[agents.csx-verifier]
+config_file = "./agents/csx-verifier.toml"
+
+[[hooks.UserPromptSubmit]]
+hooks = [{ type = "command", command = "node '/home/ubuntu/work/ccdx/.codex/hooks/csx-hook.mjs' user-prompt-submit", commandWindows = "node \"/home/ubuntu/work/ccdx/.codex/hooks/csx-hook.mjs\" user-prompt-submit", timeout = 3, statusMessage = "(csx) Checking skill routing" }]
+# <<< csx managed <<<
+
+# >>> csx feature default_mode_request_user_input >>>
+[features]
+default_mode_request_user_input = true
+# <<< csx feature default_mode_request_user_input <<<

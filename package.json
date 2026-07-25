@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check bin/csx.js && node --check lib/codex-models.js && node --check lib/install.js && node --check lib/installation-state.js && node --check lib/presets.js && node --check lib/setup.js && node --check lib/transaction-lock.js && node --check lib/transaction.js && node --check payload/hooks/csx-hook.mjs"
+    "check": "node --check bin/csx.js && node --check lib/codex-models.js && node --check lib/install.js && node --check lib/installation-state.js && node --check lib/presets.js && node --check lib/setup.js && node --check lib/setup-command.js && node --check lib/setup-tui.js && node --check lib/terminal-text.js && node --check lib/transaction-lock.js && node --check lib/transaction.js && node --check payload/hooks/csx-hook.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -33,6 +33,11 @@
     "access": "public"
   },
   "devDependencies": {
+    "ink-testing-library": "4.0.0",
     "node-pty": "^1.1.0"
+  },
+  "dependencies": {
+    "ink": "6.8.0",
+    "react": "19.2.3"
   }
 }

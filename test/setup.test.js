@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,7 +9,8 @@ import { AGENT_NAMES, cloneMatrix, presetMatrix } from "../lib/presets.js";
 import { applySetup, builtInPresets, codexModelContext, CUSTOM_PRESETS_FILE, readAgentMatrix, readCustomPresets, requestUniqueCustomPresetName, selectSetupScope, setupLayout } from "../lib/setup.js";
 import { install } from "../lib/install.js";
 import { RECEIPT_NAME } from "../lib/installation-state.js";
-import { acquireRootLock, TransactionLockError } from "../lib/transaction-lock.js";
+import { __setTransactionTestHooks, beginTransaction } from "../lib/transaction.js";
+import { acquireRootLock, controlPath, TransactionLockError } from "../lib/transaction-lock.js";
 
 const catalog = [
   { model: "gpt-5.6-luna", efforts: ["low", "high"] },
@@ -20,6 +21,41 @@ const declaredTransaction = (onDeclare, transaction) => async ({ createDeclarati
   onDeclare?.(await createDeclaration());
   return transaction;
 };
+async function createSetupFixture(root, matrix, { receiptMatrix, customPresets } = {}) {
+  const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
+  const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+  await mkdir(layout.agentsRoot, { recursive: true });
+  await writeFile(layout.configPath, "# preserve this TOML\n");
+  for (const [index, path] of paths.entries()) {
+    const name = AGENT_NAMES[index];
+    await writeFile(path, `name = "${name}"\nmodel = "${matrix[name].model}"\nmodel_reasoning_effort = "${matrix[name].reasoning}"\nextra = "preserved"\n`);
+  }
+  const receiptPath = join(layout.configRoot, RECEIPT_NAME);
+  const receipt = { root: layout.root, files: paths };
+  if (receiptMatrix !== undefined) receipt.setupAgentMatrix = { version: 1, agents: receiptMatrix };
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  const customPath = join(layout.configRoot, CUSTOM_PRESETS_FILE);
+  if (customPresets !== undefined) {
+    await writeFile(customPath, `${JSON.stringify({ version: 1, presets: customPresets }, null, 2)}\n`);
+  }
+  return { layout, paths, receiptPath, customPath };
+}
+async function snapshotTree(root, relative = "") {
+  const result = {};
+  for (const entry of await readdir(join(root, relative), { withFileTypes: true })) {
+    const path = join(relative, entry.name);
+    if (entry.isDirectory()) Object.assign(result, await snapshotTree(root, path));
+    else result[path] = await readFile(join(root, path));
+  }
+  return result;
+}
+async function transactionArtifacts(root, id) {
+  const result = {};
+  for (const directory of ["bridges", "journals", "terminals", "cleanup"]) {
+    result[directory] = await readFile(join(controlPath(root), directory, `${id}.json`)).catch((error) => error.code);
+  }
+  return result;
+}
 
 test("setup selects a receipt-owned project, rejects unmanaged project configuration, and propagates probe failures", () => {
   const cwd = "/work/project";
@@ -85,6 +121,138 @@ test("duplicate custom preset names are retried case-insensitively", async () =>
   );
   assert.equal(name, "fresh");
   assert.deepEqual(duplicates, ["Work"]);
+});
+
+test("setup rejects a catalog-invalid pair before creating a transaction or writing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-invalid-"));
+  try {
+    const matrix = presetMatrix("Low");
+    const { layout, paths } = await createSetupFixture(root, matrix, { receiptMatrix: matrix });
+    const invalid = cloneMatrix(matrix);
+    invalid[AGENT_NAMES[0]] = { model: "gpt-5.6-luna", reasoning: "xhigh" };
+    const before = await snapshotTree(root);
+    let transactions = 0;
+    await assert.rejects(
+      applySetup({
+        layout,
+        matrix: invalid,
+        catalog,
+        expectedFilesLoader: async () => paths,
+        transactionFactory: async () => {
+          transactions += 1;
+          assert.fail("catalog-invalid setup must not create a transaction");
+        }
+      }),
+      /unavailable model\/effort pair/
+    );
+    assert.equal(transactions, 0);
+    assert.deepEqual(await snapshotTree(root), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("setup rolls back a real cross-root transaction without retaining terminal control artifacts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-write-failure-"));
+  try {
+    const current = presetMatrix("Low");
+    const matrix = cloneMatrix(current);
+    matrix[AGENT_NAMES[0]] = { model: "gpt-5.6-terra", reasoning: "high" };
+    matrix[AGENT_NAMES[1]] = { model: "gpt-5.6-sol", reasoning: "high" };
+    const { layout, paths } = await createSetupFixture(root, current, {
+      receiptMatrix: current,
+      customPresets: { Existing: current }
+    });
+    const before = await snapshotTree(root);
+    const beforeModes = new Map(await Promise.all(
+      [...paths, layout.configPath, join(layout.configRoot, RECEIPT_NAME), join(root, ".codex", CUSTOM_PRESETS_FILE)]
+        .map(async (path) => [path, (await stat(path)).mode & 0o777])
+    ));
+    let writes = 0;
+    let transaction;
+    let failureInjected = false;
+    const restoreHooks = __setTransactionTestHooks({
+      beforeTargetRename: async ({ path }) => {
+        if (failureInjected || !transaction?.manifest.writeSet.includes(path)) return;
+        writes += 1;
+        if (writes === 3) {
+          failureInjected = true;
+          throw new Error("injected middle write failure");
+        }
+      }
+    });
+    try {
+      await assert.rejects(
+        applySetup({
+          layout,
+          matrix,
+          baselineMatrix: current,
+          catalog,
+          customPresetName: "Team",
+          selectedAgents: AGENT_NAMES.slice(0, 2),
+          env: { HOME: root },
+          expectedFilesLoader: async () => paths,
+          transactionFactory: async (declaration) => (transaction = await beginTransaction(declaration))
+        }),
+        /injected middle write failure/
+      );
+    } finally {
+      restoreHooks();
+    }
+    assert.equal(writes, 3);
+    assert.equal(transaction.manifest.status, "rolled_back");
+    const after = await snapshotTree(root);
+    const addedPaths = Object.keys(after).filter((path) => !(path in before));
+    assert.ok(addedPaths.every((path) => /(?:^|[/\\])\.csx-transactions[/\\].+\.lock$/.test(path)), JSON.stringify(addedPaths));
+    for (const path of addedPaths) delete after[path];
+    assert.deepEqual(after, before);
+    for (const [path, mode] of beforeModes) assert.equal((await stat(path)).mode & 0o777, mode, path);
+    for (const transactionRoot of transaction.manifest.roots.map(({ root: value }) => value)) {
+      assert.deepEqual(await transactionArtifacts(transactionRoot, transaction.id), {
+        bridges: "ENOENT", journals: "ENOENT", terminals: "ENOENT", cleanup: "ENOENT"
+      });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("setup rejects baseline agent drift with zero transaction writes or commits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-agent-drift-"));
+  try {
+    const baseline = presetMatrix("Low");
+    const matrix = presetMatrix("Medium");
+    const { layout, paths } = await createSetupFixture(root, baseline, { receiptMatrix: baseline });
+    let writes = 0;
+    let commits = 0;
+    await assert.rejects(
+      applySetup({
+        layout,
+        matrix,
+        baselineMatrix: baseline,
+        catalog,
+        expectedFilesLoader: async () => paths,
+        catalogLoader: async () => {
+          const name = AGENT_NAMES[0];
+          const changed = cloneMatrix(baseline);
+          changed[name] = { model: "gpt-5.6-terra", reasoning: "high" };
+          await writeFile(paths[0], `model = "${changed[name].model}"\nmodel_reasoning_effort = "${changed[name].reasoning}"\n`);
+          return catalog;
+        },
+        transactionFactory: async ({ createDeclaration }) => {
+          await createDeclaration();
+          return {
+            write: async () => { writes += 1; },
+            commit: async () => { commits += 1; },
+            rollback: async () => {}
+          };
+        }
+      }),
+      /agent matrix changed after preview/
+    );
+    assert.equal(writes, 0);
+    assert.equal(commits, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("setup snapshots the complete installation target while limiting writes to selected agents", async () => {
@@ -189,26 +357,22 @@ test("setup rewrites legal multiline assignments and records the effective matri
 test("setup persists receipt drift without agent changes and no-ops when the receipt matches", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-setup-receipt-"));
   try {
-    const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
     const matrix = presetMatrix("Low");
-    const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
-    await mkdir(layout.agentsRoot, { recursive: true });
-    await writeFile(layout.configPath, "# preserve this TOML\n");
-    for (const [index, path] of paths.entries()) {
-      await writeFile(path, `name = "${AGENT_NAMES[index]}"\nmodel = "${matrix[AGENT_NAMES[index]].model}"\nmodel_reasoning_effort = "${matrix[AGENT_NAMES[index]].reasoning}"\n`);
-    }
-    const receiptPath = join(layout.configRoot, ".csx-install-receipt.json");
-    await writeFile(receiptPath, JSON.stringify({ root, files: paths }));
+    const { layout, paths, receiptPath } = await createSetupFixture(root, matrix);
+    const agentBytes = await Promise.all(paths.map((path) => readFile(path)));
     const writes = [];
     const result = await applySetup({ layout, matrix, catalog, expectedFilesLoader: async () => paths, transactionFactory: declaredTransaction(undefined, {
       write: async (path, text) => { writes.push({ path, text }); await writeFile(path, text); }, commit: async () => {}, rollback: async () => {}
     }) });
     assert.equal(result.changed, true);
+    assert.deepEqual(result.paths, [receiptPath]);
     assert.deepEqual(writes.map(({ path }) => path), [receiptPath]);
     assert.deepEqual(JSON.parse(writes[0].text).setupAgentMatrix, { version: 1, agents: matrix });
+    assert.deepEqual(await Promise.all(paths.map((path) => readFile(path))), agentBytes);
 
     await writeFile(receiptPath, writes[0].text);
     let rolledBack = false;
+    const beforeNoOp = await Promise.all(paths.map((path) => readFile(path)));
     const noOp = await applySetup({ layout, matrix, catalog, expectedFilesLoader: async () => paths, transactionFactory: declaredTransaction(undefined, {
       write: async () => assert.fail("a matching receipt must not be written"),
       commit: async () => assert.fail("a matching receipt must not commit"),
@@ -216,6 +380,107 @@ test("setup persists receipt drift without agent changes and no-ops when the rec
     }) });
     assert.deepEqual(noOp, { changed: false, scope: "project" });
     assert.equal(rolledBack, true);
+    assert.deepEqual(await Promise.all(paths.map((path) => readFile(path))), beforeNoOp);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("real custom-only setup is followed immediately by an artifact-free no-op", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-custom-only-"));
+  try {
+    const matrix = presetMatrix("Low");
+    const { layout, paths, customPath } = await createSetupFixture(root, matrix, {
+      receiptMatrix: matrix,
+      customPresets: {}
+    });
+    const trackedPaths = [...paths, layout.configPath, join(layout.configRoot, RECEIPT_NAME)];
+    const beforeBytes = await Promise.all(trackedPaths.map((path) => readFile(path)));
+    const beforeModes = await Promise.all(trackedPaths.map(async (path) => (await stat(path)).mode & 0o777));
+    const writes = [];
+    let transaction;
+    const restoreHooks = __setTransactionTestHooks({
+      beforeTargetRename: async ({ path }) => {
+        if (transaction?.manifest.writeSet.includes(path)) writes.push(path);
+      }
+    });
+    let result;
+    try {
+      result = await applySetup({
+        layout,
+        matrix,
+        baselineMatrix: matrix,
+        catalog,
+        customPresetName: "Team",
+        env: { HOME: root },
+        expectedFilesLoader: async () => paths,
+        transactionFactory: async (declaration) => (transaction = await beginTransaction(declaration))
+      });
+    } finally {
+      restoreHooks();
+    }
+    assert.equal(result.changed, true);
+    assert.deepEqual(result.paths, [customPath]);
+    assert.deepEqual(writes, [customPath]);
+    assert.equal((await stat(customPath)).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(await readFile(customPath, "utf8")).presets.Team, matrix);
+    assert.deepEqual(await Promise.all(trackedPaths.map((path) => readFile(path))), beforeBytes);
+    assert.deepEqual(await Promise.all(trackedPaths.map(async (path) => (await stat(path)).mode & 0o777)), beforeModes);
+
+    let noOpWrites = 0;
+    const restoreNoOpHooks = __setTransactionTestHooks({
+      beforeTargetRename: async ({ path }) => {
+        if (noOpTransaction?.manifest.writeSet.includes(path)) noOpWrites += 1;
+      }
+    });
+    let noOpTransaction;
+    let noOp;
+    try {
+      noOp = await applySetup({
+        layout,
+        matrix,
+        baselineMatrix: matrix,
+        catalog,
+        env: { HOME: root },
+        expectedFilesLoader: async () => paths,
+        transactionFactory: async (declaration) => (noOpTransaction = await beginTransaction(declaration))
+      });
+    } finally {
+      restoreNoOpHooks();
+    }
+    assert.deepEqual(noOp, { changed: false, scope: "project" });
+    assert.equal(noOpWrites, 0);
+    assert.deepEqual(await Promise.all(trackedPaths.map((path) => readFile(path))), beforeBytes);
+    assert.deepEqual(await Promise.all(trackedPaths.map(async (path) => (await stat(path)).mode & 0o777)), beforeModes);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("selectedAgents rejects target changes outside the selected subset before writing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-selected-agents-"));
+  try {
+    const current = presetMatrix("Low");
+    const matrix = presetMatrix("Medium");
+    const { layout, paths } = await createSetupFixture(root, current, { receiptMatrix: current });
+    let writes = 0;
+    let commits = 0;
+    await assert.rejects(
+      applySetup({
+        layout,
+        matrix,
+        baselineMatrix: current,
+        catalog,
+        selectedAgents: [AGENT_NAMES[0]],
+        expectedFilesLoader: async () => paths,
+        transactionFactory: declaredTransaction(undefined, {
+          write: async () => { writes += 1; },
+          commit: async () => { commits += 1; },
+          rollback: async () => {}
+        })
+      }),
+      /unselected agent settings changed after preview/
+    );
+    assert.equal(writes, 0);
+    assert.equal(commits, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -327,6 +592,7 @@ test("setup rejects custom-preset drift after preview without writing either sco
     await writeFile(presetsPath, JSON.stringify({ version: 1, presets: {} }));
 
     let writes = 0;
+    let commits = 0;
     let rolledBack = false;
     let initialSnapshotSet;
     await assert.rejects(
@@ -345,7 +611,7 @@ test("setup rejects custom-preset drift after preview without writing either sco
           initialSnapshotSet = declaration.snapshotSet;
           return declaredTransaction(undefined, {
             write: async () => { writes += 1; },
-            commit: async () => assert.fail("drifted preview must not commit"),
+            commit: async () => { commits += 1; },
             rollback: async () => { rolledBack = true; }
           })(declaration);
         }
@@ -354,6 +620,7 @@ test("setup rejects custom-preset drift after preview without writing either sco
     );
     assert.deepEqual(new Set(initialSnapshotSet), new Set([...paths, layout.configPath, join(layout.configRoot, RECEIPT_NAME), presetsPath]));
     assert.equal(writes, 0);
+    assert.equal(commits, 0);
     assert.equal(rolledBack, false);
   } finally {
     await rm(home, { recursive: true, force: true });

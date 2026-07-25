@@ -1,0 +1,5 @@
+interface:
+  display_name: "csx-plan-pro"
+  short_description: "Create a rigorously reviewed plan"
+policy:
+  allow_implicit_invocation: false

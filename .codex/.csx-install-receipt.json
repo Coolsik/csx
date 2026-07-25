@@ -1,0 +1,36 @@
+{
+  "version": "0.1.0",
+  "scope": "project",
+  "root": "/home/ubuntu/work/ccdx",
+  "configRoot": "/home/ubuntu/work/ccdx/.codex",
+  "files": [
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-analyze/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-analyze/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-spec/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-spec/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-plan/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-plan/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-plan-pro/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-plan-pro/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-start-goal/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-start-goal/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-deslop/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-deslop/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-code-review/SKILL.md",
+    "/home/ubuntu/work/ccdx/.agents/skills/csx-code-review/agents/openai.yaml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-analyst.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-architect.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-code-reviewer.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-critic.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-executor.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-explorer.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-planner.toml",
+    "/home/ubuntu/work/ccdx/.codex/agents/csx-verifier.toml",
+    "/home/ubuntu/work/ccdx/.codex/hooks/csx-hook.mjs"
+  ],
+  "installedAt": "2026-07-24T15:25:30.740Z",
+  "featureConfig": {
+    "key": "default_mode_request_user_input",
+    "previousLine": null
+  }
+}

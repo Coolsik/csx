@@ -1,0 +1,5 @@
+interface:
+  display_name: "csx-plan"
+  short_description: "Create a concise implementation plan"
+policy:
+  allow_implicit_invocation: false

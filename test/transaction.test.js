@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,6 +23,74 @@ async function withTransactionTestHooks(hooks, operation) {
 function recoveryAuthority(transaction) {
   const { participants, roots, snapshotSet } = transaction.manifest;
   return recoveryAuthorityFromDeclaration({ coordinationRoots: roots.map(({ root }) => root), participants, snapshotSet });
+}
+function bridgeRecord(manifest, bridge, state = "terminal") {
+  return {
+    version: 2,
+    id: manifest.id,
+    state,
+    root: bridge.root,
+    rootKey: bridge.rootKey,
+    control: bridge.control,
+    peers: bridge.peers,
+    participants: manifest.participants,
+    snapshotSet: manifest.snapshotSet,
+    writeSet: manifest.writeSet
+  };
+}
+async function seedTerminalArtifacts(manifest, { journals = true, terminals = true, bridges = true } = {}) {
+  for (const { control } of manifest.roots) {
+    if (journals) await writeFile(join(control, "journals", `${manifest.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
+    if (terminals) await writeFile(join(control, "terminals", `${manifest.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
+  }
+  if (bridges) for (const bridge of manifest.bridges) {
+    await writeFile(join(bridge.control, "bridges", `${manifest.id}.json`), JSON.stringify(bridgeRecord(manifest, bridge)), { mode: 0o600 });
+  }
+}
+async function assertNoTransactionArtifacts(transaction) {
+  for (const { control } of transaction.manifest.roots) {
+    for (const directory of ["bridges", "journals", "terminals", "cleanup"]) {
+      assert.equal(
+        await readFile(join(control, directory, `${transaction.id}.json`)).catch((error) => error.code),
+        "ENOENT",
+        `${control}:${directory}`
+      );
+    }
+  }
+}
+async function beginCrossRootTransaction() {
+  const root = await temporary();
+  const metadataRoot = await temporary();
+  const configPath = join(root, "config.toml");
+  const receiptPath = join(root, ".csx-install-receipt.json");
+  const target = join(root, "managed.txt");
+  const metadataPath = join(metadataRoot, "presets.json");
+  const transaction = await beginTransaction({
+    operation: "install",
+    participants: [
+      {
+        role: "prospective-installation-target",
+        root,
+        configPath,
+        receiptPath,
+        paths: [configPath, receiptPath, target],
+        preimages: {
+          [configPath]: { state: "absent" },
+          [receiptPath]: { state: "absent" },
+          [target]: { state: "absent" }
+        }
+      },
+      {
+        role: "metadata-participant",
+        root: metadataRoot,
+        paths: [metadataPath],
+        schema: { version: 1, type: "csx-metadata" }
+      }
+    ],
+    snapshotSet: [configPath, receiptPath, target, metadataPath],
+    writeSet: [target, metadataPath]
+  });
+  return { root, metadataRoot, target, metadataPath, transaction };
 }
 
 test("recovery refuses forged peer descriptors without creating the peer control store", async () => {
@@ -250,6 +319,41 @@ test("transaction declaration rejects receipt snapshots that drift from the lock
     /receipt snapshot|preimage|authority/
   );
 });
+test("normal cross-root commit and rollback remove every transaction control record", async () => {
+  for (const outcome of ["commit", "rollback"]) {
+    const { target, metadataPath, transaction } = await beginCrossRootTransaction();
+    await transaction.write(target, "replacement", { mode: 0o600 });
+    await transaction.write(metadataPath, '{"version":1}\n', { mode: 0o600 });
+    await transaction[outcome]();
+    await assertNoTransactionArtifacts(transaction);
+    if (outcome === "rollback") {
+      assert.equal(await readFile(target).catch((error) => error.code), "ENOENT");
+      assert.equal(await readFile(metadataPath).catch((error) => error.code), "ENOENT");
+    }
+  }
+});
+test("interrupted terminal cleanup remains recoverable and full-authority recovery converges", async () => {
+  const { root, transaction } = await beginCrossRootTransaction();
+  let interrupted = false;
+  await withTransactionTestHooks({
+    afterCleanupAcknowledgementReplication: async () => {
+      if (interrupted) return;
+      interrupted = true;
+      throw new Error("terminal cleanup interrupted");
+    }
+  }, async () => {
+    await assert.rejects(transaction.commit(), /terminal cleanup interrupted/);
+  });
+  await transaction.close();
+  assert.equal(interrupted, true);
+  assert.ok(transaction.manifest.roots.some(({ control }) =>
+    ["journals", "terminals", "bridges", "cleanup"].some((directory) =>
+      existsSync(join(control, directory, `${transaction.id}.json`))
+    )
+  ));
+  assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), []);
+  await assertNoTransactionArtifacts(transaction);
+});
 test("recovery converges an interrupted cross-root transaction through its bridge closure", async () => {
   const root = await temporary();
   const metadataRoot = await temporary();
@@ -289,8 +393,7 @@ test("recovery converges an interrupted cross-root transaction through its bridg
   assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), [transaction.id]);
   assert.equal(await readFile(target).catch((error) => error.code), "ENOENT");
   assert.equal(await readFile(metadataPath).catch((error) => error.code), "ENOENT");
-  assert.equal(await readFile(join(controlPath(root), "journals", `${transaction.id}.json`), "utf8").then(Boolean), true);
-  assert.equal(await readFile(join(controlPath(metadataRoot), "journals", `${transaction.id}.json`), "utf8").then(Boolean), true);
+  await assertNoTransactionArtifacts(transaction);
   assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), []);
 });
 test("recovery removes bridge-only intent records under every peer lock", async () => {
@@ -336,16 +439,13 @@ test("declaration root replacement fails before bridge or journal publication", 
   }), /root changed while locked|recovery_required/);
   assert.equal(await readFile(join(controlPath(root), "journals")).catch((error) => error.code), "ENOENT");
 });
-test("expired terminal cleanup retains tombstones through journal and bridge cleanup states", async () => {
+test("terminal cleanup converges from journal, bridge, and terminal recovery states", async () => {
   for (const state of ["journals", "bridges", "terminals"]) {
     const root = await temporary(), configPath = join(root, "config.toml"), receiptPath = join(root, ".csx-install-receipt.json"), target = join(root, "managed.txt");
     const transaction = await beginTransaction({ operation: "install", participants: [{ role: "prospective-installation-target", root, configPath, receiptPath, paths: [configPath, receiptPath, target], preimages: { [configPath]: { state: "absent" }, [receiptPath]: { state: "absent" }, [target]: { state: "absent" } } }], snapshotSet: [configPath, receiptPath, target], writeSet: [target] });
     await transaction.commit();
     const manifest = transaction.manifest;
-    manifest.terminalAt = 0;
-    await writeFile(join(controlPath(root), "terminals", `${transaction.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
-    if (state === "journals") await writeFile(join(controlPath(root), "journals", `${transaction.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
-    if (state !== "journals") await rm(join(controlPath(root), "journals", `${transaction.id}.json`));
+    await seedTerminalArtifacts(manifest, { journals: state === "journals", bridges: state === "bridges" });
     assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), []);
     for (const directory of ["journals", "bridges", "terminals"]) assert.equal(await readFile(join(controlPath(root), directory, `${transaction.id}.json`)).catch((error) => error.code), "ENOENT");
   }
@@ -438,9 +538,7 @@ test("cleanup acknowledgement rejects unsafe modes and symlinks before deleting 
     const transaction = await beginTransaction({ operation: "install", participants: [{ role: "prospective-installation-target", root, configPath, receiptPath, paths: [configPath, receiptPath, target], preimages: { [configPath]: { state: "absent" }, [receiptPath]: { state: "absent" }, [target]: { state: "absent" } } }], snapshotSet: [configPath, receiptPath, target], writeSet: [target] });
     await transaction.commit();
     const manifest = transaction.manifest;
-    manifest.terminalAt = 0;
-    await writeFile(join(controlPath(root), "terminals", `${transaction.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
-    await rm(join(controlPath(root), "journals", `${transaction.id}.json`));
+    await seedTerminalArtifacts(manifest, { journals: false, bridges: false });
     await withTransactionTestHooks({ afterCleanupAcknowledgementReplication: async () => {
       const acknowledgement = join(controlPath(root), "cleanup", `${transaction.id}.json`);
       if (unsafe === "mode") await chmod(acknowledgement, 0o644);
@@ -459,9 +557,8 @@ test("cleanup acknowledgements authoritatively remove terminal-bridge-only resid
   ], snapshotSet: [configPath, receiptPath, target, metadataPath], writeSet: [target, metadataPath] });
   await transaction.commit();
   const acknowledgement = { version: 2, id: transaction.id, state: "cleaned", roots: transaction.manifest.roots, participants: transaction.manifest.participants, snapshotSet: transaction.manifest.snapshotSet, writeSet: transaction.manifest.writeSet };
+  await seedTerminalArtifacts(transaction.manifest, { journals: false, terminals: false });
   for (const current of [root, peer]) {
-    await rm(join(controlPath(current), "journals", `${transaction.id}.json`));
-    await rm(join(controlPath(current), "terminals", `${transaction.id}.json`));
     await writeFile(join(controlPath(current), "cleanup", `${transaction.id}.json`), JSON.stringify(acknowledgement), { mode: 0o600 });
   }
   await recoverTransactions(root, recoveryAuthority(transaction));
@@ -476,11 +573,7 @@ test("cleanup acknowledgement replication failure preserves terminal records unt
   ], snapshotSet: [configPath, receiptPath, target, metadataPath], writeSet: [target, metadataPath] });
   await transaction.commit();
   const manifest = transaction.manifest;
-  manifest.terminalAt = 0;
-  for (const current of [root, peer]) {
-    await writeFile(join(controlPath(current), "terminals", `${transaction.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
-    await rm(join(controlPath(current), "journals", `${transaction.id}.json`));
-  }
+  await seedTerminalArtifacts(manifest, { journals: false });
 
   let acknowledgements = 0;
   await withTransactionTestHooks({ afterCleanupAcknowledgementReplication: async () => {
@@ -503,11 +596,7 @@ test("cleanup resumes after first-root deletion failure without pre-seeded ackno
   ], snapshotSet: [configPath, receiptPath, target, metadataPath], writeSet: [target, metadataPath] });
   await transaction.commit();
   const manifest = transaction.manifest;
-  manifest.terminalAt = 0;
-  for (const current of [root, peer]) {
-    await writeFile(join(controlPath(current), "terminals", `${transaction.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
-    await rm(join(controlPath(current), "journals", `${transaction.id}.json`));
-  }
+  await seedTerminalArtifacts(manifest, { journals: false });
 
   let emptied = false;
   await withTransactionTestHooks({ afterCleanupRootDeletion: async ({ root: deletedRoot, directory }) => {
@@ -534,8 +623,8 @@ test("surviving cleanup acknowledgement completes after acknowledgement deletion
   ], snapshotSet: [configPath, receiptPath, target, metadataPath], writeSet: [target, metadataPath] });
   await transaction.commit();
   const acknowledgement = { version: 2, id: transaction.id, state: "cleaned", roots: transaction.manifest.roots, participants: transaction.manifest.participants, snapshotSet: transaction.manifest.snapshotSet, writeSet: transaction.manifest.writeSet };
+  await seedTerminalArtifacts(transaction.manifest, { journals: false, terminals: false });
   for (const current of [root, peer]) {
-    for (const directory of ["journals", "terminals"]) await rm(join(controlPath(current), directory, `${transaction.id}.json`));
     await writeFile(join(controlPath(current), "cleanup", `${transaction.id}.json`), JSON.stringify(acknowledgement), { mode: 0o600 });
   }
   let interrupted = false;
