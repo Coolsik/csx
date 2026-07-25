@@ -187,12 +187,15 @@ the Planner to split it into bounded `G001...Gnnn` execution goals in
 `.csx/goals/`. Executors own all implementation and rework. The root invokes
 scoped `csx-deslop` cleanup after implementation rather than asking a leaf
 Executor to start another workflow. Deslop proves behavior preservation by
-running the same behavior lock before and after one bounded cleanup pass. When
-all execution goals are ready, the
-root runs the accepted cumulative verification once and the unchanged complete
-diff must pass `csx-code-review`. Findings outside accepted scope or concrete
-change-induced safety and regression risks are recorded as optional hardening
-rather than silently expanding the goal.
+running the same behavior lock before and after one bounded cleanup pass. Each
+goal permits one orchestration-level implementation correction after its
+Executor returns. When all execution goals are ready, the root runs at most
+three cumulative verification iterations, with at most two repairs for the
+same failure, and the unchanged complete diff must earn `APPROVE` within at most
+three cumulative `csx-code-review` iterations. Retry counters persist in the
+goal artifact. Findings outside accepted scope or concrete change-induced safety
+and regression risks are recorded as optional hardening rather than silently
+expanding the goal.
 
 ## Uninstall
 

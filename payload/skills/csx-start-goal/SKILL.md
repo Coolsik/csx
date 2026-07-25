@@ -77,6 +77,18 @@ Latest cause:
 Changed paths:
 Invalidated current evidence:
 
+## Attempt Counters
+- Goal implementation corrections:
+  - G001: 0/1
+- Final cumulative verification: 0/3
+- Verification failure repairs:
+  - V001: 0/2
+- Environment reruns:
+  - V001: 0/1
+- Cumulative code review: 0/3
+- Review finding repairs:
+  - F001: 0/2
+
 ## Success Criteria
 - [ ] AC1: <preserved criterion>
   - Evidence: <minimal command/scenario and current result>
@@ -102,9 +114,9 @@ Invalidated current evidence:
 ## Completion Decision
 ```
 
-Keep only the current revision, current goal state, latest valid evidence, and open findings in the active sections. Collapse older revisions to short provenance rows. Give subagents only their goal scope, relevant current diff, criteria, latest evidence, and stop conditions rather than forwarding the complete historical artifact.
+Keep only the current revision, current goal state, latest valid evidence, attempt counters, and open findings in the active sections. Collapse older revisions to short provenance rows. Increment every applicable attempt counter before dispatching the work or running the command so interruption and resume cannot create a free retry. Give subagents only their goal scope, relevant current diff, criteria, latest evidence, and stop conditions rather than forwarding the complete historical artifact.
 
-Existing artifacts with legacy scoped or integrated verification fields remain resumable. Treat those fields as historical evidence; do not require or produce new independent-agent results.
+Existing artifacts with legacy scoped or integrated verification fields remain resumable. Reconstruct counters from explicit recorded attempts and reviews when possible. When history does not prove a prior count, record `legacy baseline`, initialize the missing counter at zero for future attempts, and do not guess or block resume. Treat legacy verification fields as historical evidence; do not require or produce new independent-agent results.
 
 ## Preserve Success Criteria
 
@@ -150,29 +162,34 @@ Always assign implementation and code-changing rework to `csx-executor`. For eac
 1. Set it to `in_progress`.
 2. Assign exact owned files, criteria, minimal targeted verification, expected results, failure signals, dependency state, accepted boundaries, and stop conditions.
 3. Require status, changed files, addressed criteria, commands and raw results, assumptions, blockers, and residual risk.
-4. Return one recoverable defect to the same Executor for one bounded retry. Stop for a repeated failure, ownership expansion, or user-owned decision.
+4. Allow the initial Executor assignment to implement, debug, and rerun its targeted verification as needed within its bounded scope. After it returns, allow at most one orchestration-level correction round per goal for a recoverable defect before `ready_for_review`; increment that goal's `0/1` counter before dispatch. If the corrected result is still defective, even with a different defect, or requires ownership expansion or a user-owned decision, stop and report the blocker. Final-verification and review rework use their own counters and neither consume nor reset this implementation correction.
 5. For every non-trivial code goal, invoke `$csx-deslop` once with the current revision, owned changed files and tests, accepted invariants, passing targeted verification, current diff, and stop conditions. A low-risk documentation or wording-only goal may record `deslop: not applicable`.
-6. Accept only `passed/cleaned` or `passed/no-op` for the final revision. Record its before/after behavior lock and residual risk.
+6. Accept only `passed/cleaned` or `passed/no-op` for the final revision. Record its before/after behavior lock and residual risk. On `blocked`, a failed behavior lock, a changed verification command, scope expansion, or revision mismatch, keep the goal below `ready_for_review`, record the blocker, and stop this workflow without assigning another repair.
 7. Set the goal to `ready_for_review` when executor verification and required deslop pass. There is no separate scoped evidence agent.
 
 ## Final Cumulative Verification
 
-When every goal is `ready_for_review`, execute the accepted cumulative verification once on the unchanged current revision.
+When every goal is `ready_for_review`, execute the accepted cumulative verification on the unchanged current revision. Allow at most three cumulative verification iterations, including the first run and any full rerun invalidated by later code-review rework. Increment the persisted iteration counter before each full run; a new failure or revision never resets it.
 
 - Deduplicate equivalent commands and honor stronger explicit requirements from the accepted plan.
 - The root records commands, environment, exit status, and concise raw summaries without changing the success criteria.
-- On failure, map the failing command to the current owning goal and assign bounded executor rework. Rerun only invalidated targeted/deslop evidence, then rerun the final cumulative verification once on the new final revision.
+- For every failure, assign a stable `Vnnn` identifier from the command or scenario, primary failure signal, and owning goal when one exists. Preserve that identifier while the material failure remains the same, even when wording or line numbers change.
+- Classify each failure as exactly one of `product defect`, `test or verification defect`, `environment or transient failure`, or `unknown, scope, or user-decision blocker`.
+- For a product defect, map it to the current owning goal. For a test or verification defect, map it to the goal that owns that evidence. Increment the failure's repair counter before bounded Executor rework and allow at most two repairs for the same failure. Rerun only invalidated targeted and deslop evidence, then start the next cumulative verification iteration on the new final revision.
+- For an environment or transient failure, do not edit code. Rerun the exact failing command once on the unchanged revision without incrementing the full-iteration counter, and persist its `0/1` environment-rerun counter before execution. If it fails again, stop with a blocker; if it passes, record the transient result and continue the current cumulative verification decision.
+- For an unknown failure, ownership or scope expansion, or a user-owned decision, do not guess or edit code; stop and report the blocker.
+- Stop before the numeric limits when a repair produces neither new evidence nor a reduction in blockers. Different failures retain distinct repair counters but still share the three-iteration cumulative maximum.
 - Do not create a separate integrated evidence agent or criterion-by-criterion verification pass.
 
 ## Cumulative Review Loop
 
-After final cumulative verification succeeds, invoke `$csx-code-review` on the same revision with the accepted input, current criteria mapping, cumulative diff, executor/deslop evidence, boundary review, and final command results.
+After final cumulative verification succeeds, invoke `$csx-code-review` on the same revision with the accepted input, current criteria mapping, cumulative diff, executor/deslop evidence, boundary review, and final command results. Increment the persisted cumulative review counter before each invocation.
 
 1. The code-reviewer lane is always required.
 2. The Architect lane is required only when the final diff introduces or departs from a public interface, persisted-data, permission/security, migration, concurrency, cross-module dependency, or operational boundary not already cleared by the current boundary review. Diff size and file count alone do not require it.
 3. Only accepted-scope defects and change-induced safety/regression findings may return goals to `rework`. Optional hardening becomes a non-blocking follow-up.
-4. Map a blocking finding to the smallest affected goal and current owner. Ask the Planner for a corrected ownership handoff only when the finding crosses current ownership or requires an accepted-scope file not in the decomposition.
-5. Run executor rework, one union deslop pass for changed paths and affected invariants, the invalidated final verification, and the final review again.
+4. Assign and preserve a stable `Fnnn` identifier for each blocking finding from its classification, location, and material defect. Map it to the smallest affected goal and current owner. Ask the Planner for a corrected ownership handoff only when the finding crosses current ownership or requires an accepted-scope file not in the decomposition.
+5. Increment the finding's persisted repair counter before Executor rework. Run one union deslop pass for changed paths and affected invariants, the invalidated final verification, and the final review again.
 6. Allow at most two bounded repairs for the same blocking finding and at most three cumulative review iterations. Stop earlier when an iteration produces no new evidence or reduction in blockers.
 
 ## Complete
@@ -182,7 +199,7 @@ Complete only when:
 - the accepted plan and every original criterion have current direct evidence;
 - every execution goal is `ready_for_review`;
 - required deslop reports pass at the current revision;
-- the one final cumulative verification succeeds at the unchanged revision;
+- the latest cumulative verification succeeds at the unchanged revision;
 - the final code review returns `APPROVE`;
 - no product code changed afterward.
 

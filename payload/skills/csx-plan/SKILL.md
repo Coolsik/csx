@@ -57,11 +57,12 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 5. A low-risk plan touching one obvious area may skip only independent Critic review and record `Review: SKIPPED_LOW_RISK`. For broad, risky, or cross-module work, give `csx-critic` the original request or accepted spec, every user decision and assumption, the current repository evidence packet, the exact Planner body candidate, and its draft version. Require the Critic to cross-check the draft against all of those inputs before issuing a verdict.
 6. Require the Critic to return the reviewed `draft_version` and exactly one verdict:
    - `APPROVED`: the same draft version is ready to finalize.
-   - `REVISE`: resume the same Planner when possible with the exact Critic findings and produce `draft_version: 2`. If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, prior draft, and exact Critic findings, and record the fallback in the Review Summary. The root must not rewrite the draft.
-   - `BLOCKED`: preserve the best draft with unresolved blockers and do not offer execution.
-7. A revised draft MUST receive one fresh Critic review with the same complete input set plus the prior Critic findings. If that review is not `APPROVED`, mark the plan `BLOCKED`; do not revise a third version in `csx-plan`.
-8. Any material change after approval invalidates that verdict. A material change alters scope, boundaries, approach, sequence, acceptance criteria, verification, risks, assumptions, or stop conditions.
-9. Write `.csx/plans/<slug>.md` for every completed plan whether the final Decision is `READY` or `BLOCKED`. Place the exact final Planner body inside the Artifact Format envelope without modification, then append Critic review provenance and handoff metadata outside that immutable body.
+   - `REVISE`: return the exact Critic findings to the Planner for another versioned draft.
+   - `BLOCKED`: preserve the best draft with unresolved user-owned or otherwise unresolvable blockers and do not offer execution.
+7. For `REVISE`, resume the same Planner when possible with the exact prior draft, Critic findings, and user decisions, and require it to increment `draft_version` by exactly one. If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, prior draft, and exact Critic findings, and record the fallback in the Review Ledger. The root must not rewrite the draft.
+8. Every revised draft MUST receive one fresh Critic review with the same complete input set plus the prior Critic findings. Repeat until `APPROVED`, an unresolvable `BLOCKED` verdict, or a maximum of 5 review cycles. Failure to reach approval after cycle 5 produces a `BLOCKED` artifact containing the best draft and unresolved blockers.
+9. Any material change after approval invalidates that verdict and starts the next versioned review cycle, subject to the same 5-cycle maximum. A material change alters scope, boundaries, approach, sequence, acceptance criteria, verification, risks, assumptions, or stop conditions.
+10. Write `.csx/plans/<slug>.md` for every completed plan whether the final Decision is `READY` or `BLOCKED`. Place the exact final Planner body inside the Artifact Format envelope without modification, then append Critic review provenance, the Review Ledger, and handoff metadata outside that immutable body.
 
 ## Root User Decisions
 
@@ -145,6 +146,9 @@ Approved draft_version: <N or N/A>
 <exact result for the final reviewed version, or SKIPPED_LOW_RISK>
 
 ## Review Summary
+
+## Review Ledger
+| Cycle | Draft Version | Critic | Revision Reason |
 
 ## Handoff
 ```
