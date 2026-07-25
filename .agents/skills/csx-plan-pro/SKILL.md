@@ -41,8 +41,11 @@ Stop conditions:
    - strongest counterargument against the favored path
    - hidden coupling or boundary risk
    - at least one tradeoff tension
+   - classification of every concern as accepted scope, concrete change-induced safety or regression risk, or optional hardening
+   - no blocking verdict based only on optional hardening or duplicated verification
    - `CLEAR`, `WATCH`, or `BLOCK`
 6. After the Architect result returns, spawn `csx-critic` with the original request or input spec, user decisions, same complete draft, version, evidence, and Architect result. Its assignment must require the same version, verification of referenced files and symbols, simulation of two representative implementation steps, explicit reconciliation of the draft against original intent and decisions, and exactly one `APPROVED`, `REVISE`, or `BLOCKED` verdict. For `REVISE` or architectural `WATCH`/`BLOCK`, require one `Revision Brief` that reconciles both reviews, preserves every material blocker, identifies conflicting recommendations, and either gives the Planner an unambiguous correction or marks the unresolved user decision `BLOCKED`.
+   The Critic must use the same three concern classes and reject optional hardening, hypothetical unsupported environments, or duplicated checks as revision blockers.
 7. Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same `draft_version`. A missing or mismatched version is not consensus.
 8. Route every non-consensus result back through a complete review cycle:
    - Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`, or an accepted material improvement requires revision.
@@ -114,6 +117,14 @@ For initial decisions, review-exposed decisions, and final intent reconciliation
 - Critic lane cap: 3,000 tokens.
 - Skip lanes only when the task is already narrow and non-architectural; then use `csx-plan`.
 - If any required role is unavailable, ask the user to rerun `csx install` for the intended scope and write `BLOCKED: required independent role unavailable`.
+
+## Proportionality Policy
+
+- Classify proposed work and review feedback as accepted scope, concrete change-induced safety or regression risk, or optional hardening.
+- Architect and Critic may block only the first two classes. New extremes, environments, threat models, compatibility promises, or general hardening remain follow-ups unless the user explicitly includes them.
+- Undefined support boundaries that materially alter the design are user-owned decisions; do not resolve them by selecting an unbounded domain.
+- Keep the Verification Matrix minimal and deduplicated. Default to one primary-environment full suite plus affected-environment smoke checks, unless the accepted requirements or changed boundary explicitly require a complete matrix.
+- Reuse a single scenario across related criteria when it provides direct evidence and preserve stronger explicit evidence without multiplying equivalent checks.
 
 ## Planner Body Shape
 

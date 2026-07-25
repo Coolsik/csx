@@ -37,17 +37,20 @@ Always spawn `csx-code-reviewer`. Its assignment must include the user request, 
 - two-stage review: specification and scope compliance before code quality;
 - correctness, security, unsafe data handling, error handling, edge cases, regressions, tests, maintainability, and user-facing or documentation impact;
 - findings ordered `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, each with path, line, impact, trigger, and concrete fix;
+- classification of every finding as `accepted-scope defect`, `change-induced safety/regression`, or `optional hardening`;
 - an individual `APPROVE`, `COMMENT`, or `REQUEST CHANGES` recommendation.
 
-For substantial, cross-module, public-interface, security-sensitive, migration, concurrency, dependency-boundary, or architecture-affecting diffs, also spawn `csx-architect` in parallel. Its assignment must require boundary, coupling, interface, compatibility, migration, operational-impact, strongest-counterargument, and tradeoff review with an individual `CLEAR`, `WATCH`, or `BLOCK` status.
+Spawn `csx-architect` only when the final diff introduces, changes, or departs from a public interface, persisted-data contract, permission or security boundary, migration, concurrency model, cross-module dependency contract, or operational contract that is not already covered by a current supplied architecture review. Diff size, file count, or ordinary cross-module call flow alone do not require the lane. Its assignment must require boundary, coupling, interface, compatibility, migration, operational-impact, strongest-counterargument, and tradeoff review with an individual `CLEAR`, `WATCH`, or `BLOCK` status.
 
-Record `csx-architect: skipped-trivial` only when every condition holds: the diff is localized to one implementation concern; it changes no public interface, persisted data, permission or security boundary, migration, concurrency behavior, cross-module dependency, or operational contract; and targeted evidence covers the behavior. Uncertainty makes the Architect lane required.
+Record `csx-architect: skipped-trivial` when no unresolved architectural boundary above exists. A current architecture review may be reused only when it covers the same accepted scope, boundary, and evidence revision.
+
+Only `accepted-scope defect` and `change-induced safety/regression` findings may produce `REQUEST CHANGES` or `BLOCK`. `optional hardening` is non-blocking follow-up material. A security or integrity defect introduced by the change is not optional merely because the original request did not name the attack or failure mode.
 
 Use unique task names, `fork_turns: "none"`, lane-specific stop conditions, and a cap of 3,000 tokens per lane. Wait for every required lane. If `csx-code-reviewer`, or a required Architect lane, is unavailable, ask the user to rerun `csx install`; do not report `APPROVE`. Report `COMMENT` with `required csx role unavailable`.
 
 ## Composite Verdict
 
-- `REQUEST CHANGES`: Code Reviewer returns `REQUEST CHANGES`, Architect returns `BLOCK`, or any required verification is missing.
+- `REQUEST CHANGES`: Code Reviewer returns `REQUEST CHANGES` for a blocking finding, Architect returns `BLOCK` for an accepted-scope or change-induced boundary defect, or required accepted verification is missing.
 - `COMMENT`: no blocking finding remains, but either lane returns a non-blocking concern, Architect returns `WATCH`, or a required role is unavailable.
 - `APPROVE`: Code Reviewer returns `APPROVE`; Architect is `CLEAR` or was validly skipped as trivial; no required evidence is missing.
 
@@ -63,6 +66,7 @@ Reconcile duplicate findings without weakening their severity or required fix. T
 
 ## Findings
 - Severity: CRITICAL/HIGH/MEDIUM/LOW
+  Classification: accepted-scope defect / change-induced safety/regression / optional hardening
   Location: file:line
   Issue:
   Recommendation:

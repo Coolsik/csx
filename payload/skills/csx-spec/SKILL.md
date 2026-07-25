@@ -32,6 +32,14 @@ Stop conditions:
 - Keep discovery separate from implementation. Do not edit product files or start an execution workflow from this skill.
 - Write artifacts only for multi-turn clarification or when the user explicitly requests a file.
 
+## Proportionality and Support Boundaries
+
+- Specify the smallest supported domain that satisfies the user's outcome. Do not translate vague quality words such as robust, compatible, safe, or responsive into unbounded inputs, every platform, extreme environments, or a new threat model.
+- Separate required behavior, preservation of existing supported behavior, and optional hardening. Optional hardening is a non-goal or follow-up unless the user explicitly includes it.
+- When a minimum or maximum support boundary would materially change implementation, make it a user-owned decision instead of choosing the broadest interpretation.
+- A concrete security, data-integrity, or regression risk created by the requested change remains in scope even when the user did not name the failure mode.
+- Acceptance criteria should prove observable outcomes with the fewest representative success and failure cases needed; do not multiply criteria for equivalent permutations.
+
 ## Workflow
 
 ### 1. Check Suitability and Context

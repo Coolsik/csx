@@ -207,72 +207,61 @@ test("csx-plan-pro delegates all specialist judgments and binds consensus to one
   assert.match(skill, /Never invoke execution from a BLOCKED plan/);
 });
 
-test("csx-start-goal delegates decomposition, implementation, verification, and review", async () => {
+test("csx-start-goal uses proportional executor, deslop, final-command, and review gates", async () => {
   const skill = await readSkill("csx-start-goal");
 
   assert.match(skill, /Use exactly one aggregate Codex goal for the entire accepted plan/);
-  assert.match(skill, /Never create one Codex goal per execution goal/);
-  assert.match(skill, /Do not impose a count limit on acceptance criteria/);
-  assert.match(skill, /Every acceptance criterion from the accepted input is a required criterion/);
-  assert.match(skill, /do not replace, merge, weaken, or summarize away original criteria or failure signals/);
-  assert.match(skill, /Before implementation, assign each criterion concrete expected evidence/);
-  assert.match(skill, /Assign `csx-planner` the accepted spec or plan/);
-  assert.match(skill, /complete `G001\.\.\.Gnnn` execution breakdown/);
-  assert.match(skill, /do not repair the decomposition in the root/);
-  assert.match(skill, /Always assign every implementation and code-changing rework goal to `csx-executor`/);
-  assert.match(skill, /Evidence-only revalidation is not an implementation assignment and remains owned by `csx-verifier`/);
-  assert.match(skill, /rather than by a root fast path/);
-  assert.match(skill, /The Executor must not invoke another skill or subagent/);
-  assert.match(skill, /invoke `\$csx-deslop` from the root/);
-  assert.match(skill, /Authorize the Deslop orchestration to increment and record one new parent revision/);
-  assert.match(skill, /Run independent goals in parallel only when the Planner breakdown gives them no dependency and no overlapping file ownership/);
-  assert.match(skill, /A dependency is satisfied for execution when every prerequisite is `ready_for_review`/);
-  assert.match(skill, /Maintain one active owner per path/);
-  assert.match(skill, /explicit ordered ownership handoff/);
+  assert.match(skill, /Classify every proposed requirement, check, and review finding as exactly one/);
+  assert.match(skill, /accepted scope/);
+  assert.match(skill, /change-induced safety or regression/);
+  assert.match(skill, /optional hardening/);
+  assert.match(skill, /Only the first two classes may block completion/);
+  assert.match(skill, /smallest evidence set that directly proves each criterion/);
+  assert.match(skill, /full suite once in the primary environment/);
+  assert.match(skill, /bounded smoke coverage in other supported environments/);
+  assert.match(skill, /Preserve every acceptance criterion and stable identifier/);
+  assert.match(skill, /Assign `csx-planner` the accepted input/);
+  assert.match(skill, /complete `G001\.\.\.Gnnn` breakdown/);
+  assert.match(skill, /Always assign implementation and code-changing rework to `csx-executor`/);
+  assert.match(skill, /invoke `\$csx-deslop` once/);
+  assert.match(skill, /There is no separate scoped evidence agent/);
+  assert.doesNotMatch(skill, /csx-verifier/);
+  assert.doesNotMatch(skill, /\bVerifier\b/);
+  assert.match(skill, /execute the accepted cumulative verification once/);
+  assert.match(skill, /root records commands, environment, exit status, and concise raw summaries/);
+  assert.match(skill, /Do not create a separate integrated evidence agent/);
+  assert.match(skill, /A test-only change invalidates results that use that test, not unrelated product evidence/);
+  assert.match(skill, /A documentation-only change invalidates documentation evidence, not product behavior evidence/);
+  assert.match(skill, /Run only independent, non-overlapping goals in parallel/);
+  assert.match(skill, /maintain one active owner per path/i);
   assert.match(skill, /Initialize `change_revision` as `R000`/);
-  assert.match(skill, /Require every Verifier and code-review result to echo its assigned `change_revision`/);
-  assert.match(skill, /invalidate scoped Verifier and deslop evidence for every goal whose owned files changed/);
-  assert.match(skill, /return the exact defect to the same Executor when possible for one bounded retry/);
-  assert.match(skill, /assign `csx-verifier` the current `change_revision`, goal's mapped criteria/);
-  assert.match(skill, /Assign `csx-verifier` the current `change_revision`, entire accepted input/);
-  assert.match(skill, /Continue only on integrated `PASS`/);
-  assert.match(skill, /Begin final review only when every execution goal is `ready_for_review`/);
-  assert.match(skill, /Invoke `\$csx-code-review`/);
-  assert.match(skill, /Move affected goals to `rework`[\s\S]*assign every code-changing rework fix to `csx-executor`/);
-  assert.match(skill, /send the finding, current artifact, and ownership history to `csx-planner`/);
-  assert.match(skill, /Validate the replacement against the same criterion coverage, dependency, one-active-owner, handoff, verification, and stop-condition rules/);
-  assert.match(skill, /Do not hand the file back merely to refresh evidence/);
-  assert.match(skill, /union of invariants for the current owner and every evidence-only affected goal/);
-  assert.match(skill, /replacement for invalidated prior deslop evidence/);
-  assert.match(skill, /only `PASS` may return it from `rework` to `ready_for_review`/);
-  assert.match(skill, /up to 5 cumulative review iterations/);
-  assert.match(skill, /same blocking finding survives two bounded repair attempts/);
-  assert.match(skill, /never reuse invalidated scoped, integrated, deslop, or review evidence/);
+  assert.match(skill, /Architecture Boundary Review/);
+  assert.match(skill, /Reuse a current Architect `CLEAR` from an approved `csx-plan-pro`/);
+  assert.match(skill, /Diff size and file count alone do not require it/);
+  assert.match(skill, /at most two bounded repairs for the same blocking finding/);
+  assert.match(skill, /at most three cumulative review iterations/);
+  assert.match(skill, /current revision, current goal state, latest valid evidence, and open findings/);
   assert.match(skill, /call `update_goal` with `complete` exactly once/);
 });
 
-test("csx-deslop delegates cleanup to Executor and proof to Verifier", async () => {
-  const [skill, executor, verifier, metadata] = await Promise.all([
+test("csx-deslop delegates one cleanup and identical before-after proof to Executor", async () => {
+  const [skill, executor, metadata] = await Promise.all([
     readSkill("csx-deslop"),
     readAgent("csx-executor"),
-    readAgent("csx-verifier"),
     readFile(resolve(root, "payload/skills/csx-deslop/agents/openai.yaml"), "utf8"),
   ]);
 
-  assert.match(skill, /`csx-executor` owns baseline execution, smell analysis, safe code cleanup/);
-  assert.match(skill, /`csx-verifier` independently proves the final behavior-preservation claim/);
-  assert.match(skill, /Assign `csx-executor` the input evidence revision, bounded goal/);
-  assert.match(skill, /lock existing behavior by running the assigned verification unchanged before editing/);
+  assert.match(skill, /`csx-executor` owns baseline execution, smell analysis, safe cleanup/);
+  assert.match(skill, /run the assigned behavior lock before editing/);
   assert.match(skill, /apply one safe smell category at a time/);
-  assert.match(skill, /require the invoking root to increment and record the parent `change_revision`/);
-  assert.match(skill, /Assign `csx-verifier` the final evidence revision/);
-  assert.match(skill, /Require the Verifier to echo the final evidence revision/);
-  assert.match(skill, /Final evidence revision: <revision echoed by Verifier>/);
-  assert.match(skill, /return `PASS`, `PARTIAL`, or `FAIL` with an evidence matrix/);
-  assert.match(skill, /Never report `passed` unless[\s\S]*`csx-verifier` returned `PASS`/);
+  assert.match(skill, /run the exact same behavior lock after the final state/);
+  assert.match(skill, /for `cleaned`, increment the standalone revision/i);
+  assert.match(skill, /Result: passed\/cleaned \| passed\/no-op \| blocked/);
+  assert.match(skill, /Never report `passed` unless the exact same behavior lock succeeded before and after/);
+  assert.match(skill, /Do not introduce new edge cases, platforms, threat models/);
+  assert.doesNotMatch(skill, /csx-verifier/);
   assert.doesNotMatch(executor, /\$csx-deslop/);
   assert.match(executor, /Do not[\s\S]*invoke another workflow/);
-  assert.doesNotMatch(verifier, /sandbox_mode = "read-only"/);
   assert.match(metadata, /allow_implicit_invocation: false/);
 });
 
@@ -282,12 +271,33 @@ test("csx-code-review always delegates code review and conditionally delegates a
   assert.match(skill, /Always spawn `csx-code-reviewer`/);
   assert.match(skill, /include it in every required reviewer assignment and require each result plus the composite result to echo it/);
   assert.match(skill, /missing or mismatched revision is stale review evidence/);
-  assert.match(skill, /also spawn `csx-architect` in parallel/);
-  assert.match(skill, /Record `csx-architect: skipped-trivial` only when every condition holds/);
-  assert.match(skill, /Uncertainty makes the Architect lane required/);
-  assert.match(skill, /`REQUEST CHANGES`: Code Reviewer returns `REQUEST CHANGES`, Architect returns `BLOCK`/);
+  assert.match(skill, /classification of every finding as `accepted-scope defect`/);
+  assert.match(skill, /Spawn `csx-architect` only when the final diff introduces, changes, or departs from/);
+  assert.match(skill, /Diff size, file count, or ordinary cross-module call flow alone do not require the lane/);
+  assert.match(skill, /Only `accepted-scope defect` and `change-induced safety\/regression` findings may produce/);
+  assert.match(skill, /`optional hardening` is non-blocking follow-up material/);
+  assert.match(skill, /Classification: accepted-scope defect \/ change-induced safety\/regression \/ optional hardening/);
   assert.match(skill, /`APPROVE`: Code Reviewer returns `APPROVE`; Architect is `CLEAR` or was validly skipped/);
   assert.match(skill, /must not perform either specialist review itself/);
+});
+
+test("spec and planning workflows keep support and verification proportional", async () => {
+  const [spec, plan, planPro] = await Promise.all([
+    readSkill("csx-spec"),
+    readSkill("csx-plan"),
+    readSkill("csx-plan-pro"),
+  ]);
+
+  assert.match(spec, /Do not translate vague quality words[\s\S]*into unbounded inputs/);
+  assert.match(spec, /Optional hardening is a non-goal or follow-up/);
+  assert.match(spec, /minimum or maximum support boundary[\s\S]*user-owned decision/);
+  assert.match(plan, /smallest evidence set that directly proves the accepted criteria/);
+  assert.match(plan, /one full suite in the primary environment plus bounded smoke coverage/);
+  assert.match(plan, /reject duplicated verification rows and scope-expanding hardening/);
+  assert.match(planPro, /Architect and Critic may block only the first two classes/);
+  assert.match(planPro, /no blocking verdict based only on optional hardening or duplicated verification/);
+  assert.match(planPro, /Critic must use the same three concern classes/);
+  assert.match(planPro, /Default to one primary-environment full suite plus affected-environment smoke checks/);
 });
 
 test("start-goal and installer retain explicit execution and installed-role contracts", async () => {
@@ -303,5 +313,6 @@ test("start-goal and installer retain explicit execution and installed-role cont
   assert.match(skill, /explicit `Start execution with \$csx-start-goal` selection/);
   assert.match(installer, /"csx-verifier"/);
   assert.match(readme, /Agent prompts define general, workflow-independent roles/);
-  assert.match(readme, /`csx-verifier` independently gates scoped\s+goal evidence/);
+  assert.match(readme, /`csx-verifier` remains installed as a\s+general role/);
+  assert.match(readme, /`csx-start-goal` and `csx-deslop` do not invoke it/);
 });

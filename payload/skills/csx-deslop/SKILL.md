@@ -1,15 +1,15 @@
 ---
 name: csx-deslop
-description: Safely simplify an already implemented, bounded change without altering behavior or architecture, then re-run its original verification. Use when explicitly asked to clean a diff or when an execution workflow requires scoped post-implementation cleanup before review.
+description: Safely simplify an already implemented, bounded change without altering behavior or architecture, proving preservation by running the same behavior lock before and after cleanup.
 ---
 
 # csx-deslop
 
-Orchestrate one bounded behavior-preserving cleanup and independent verification. Do not turn cleanup into redesign.
+Orchestrate one bounded behavior-preserving cleanup. Do not turn cleanup into redesign and do not add a separate evidence lane.
 
 ## Orchestration Boundary
 
-The skill owns input validation, assignment construction, role availability, call ordering, verdict routing, and the final report. `csx-executor` owns baseline execution, smell analysis, safe code cleanup, and targeted verification. `csx-verifier` independently proves the final behavior-preservation claim. The root must not clean or verify the code itself.
+The skill owns input validation, assignment construction, call ordering, revision routing, and the final report. `csx-executor` owns baseline execution, smell analysis, safe cleanup, and the identical post-cleanup verification. The root must not clean the code itself or weaken the supplied behavior lock.
 
 Every subagent assignment must state:
 
@@ -26,63 +26,64 @@ Stop conditions:
 
 ## Required Input
 
-Obtain or derive all of the following before editing:
+Obtain or derive:
 
-- the bounded implementation goal and acceptance criteria;
-- the exact owned changed files and corresponding test files;
-- the already-passing initial verification command or manual scenario;
-- relevant diff and stop conditions;
-- the caller's current evidence revision when this cleanup is part of a revisioned workflow.
+- the bounded implementation goal and accepted invariants;
+- exact owned changed files and corresponding tests;
+- an already-passing behavior-lock command or manual scenario;
+- the relevant diff and stop conditions;
+- the caller's current evidence revision when nested in a revisioned workflow.
 
-If file ownership, expected behavior, or the verification baseline is unclear, return a blocker instead of broadening scope.
-
-For a standalone cleanup, initialize `cleanup_revision: D000`. For a revisioned parent workflow, use its supplied revision and its artifact as the revision authority.
+If ownership, expected behavior, or the verification baseline is unclear, return a blocker instead of broadening scope. For standalone cleanup initialize `cleanup_revision: D000`; otherwise use the parent revision authority.
 
 ## Workflow
 
-1. Confirm `csx-executor` and `csx-verifier` are available. If either is missing, ask the user to rerun `csx install` for the intended scope and return `blocked: required role unavailable`.
-2. Assign `csx-executor` the input evidence revision, bounded goal, acceptance criteria or invariants, exact owned files and corresponding tests, current diff, already-passing verification command or scenario, and stop conditions.
+1. Confirm `csx-executor` is available. If missing, ask the user to rerun `csx install` and return `blocked: required role unavailable`.
+2. Assign one Executor the evidence revision, bounded goal, invariants, exact owned files and tests, current diff, unchanged behavior lock, and stop conditions.
 3. Require the Executor to:
-   - lock existing behavior by running the assigned verification unchanged before editing;
-   - stop without cleanup if the baseline fails;
-   - inspect only the owned changed files and corresponding tests for speculative or masking fallbacks, duplicated logic, dead or unreachable code, unnecessary abstractions or indirection, ownership-boundary violations, and weak, swallowed, or misleading error handling;
-   - separate safe cleanup from changes that could alter behavior, public interfaces, data shape, security, concurrency, migrations, dependencies, or architecture;
-   - apply one safe smell category at a time and make the smallest behavior-preserving diff;
-   - avoid manufactured edits and return a no-op when no safe cleanup exists;
-   - run the same behavior-lock verification after the final state;
-   - return `cleaned`, `no-op`, or `blocked` with files, before/after commands and results, removed smells, blockers, and residual risk.
-4. If the Executor returns `blocked` or its baseline/post-cleanup verification fails, stop and report the failure. Do not ask another role to repair it inside this skill.
-5. Establish the final evidence revision before independent verification:
-   - For `cleaned`, increment the standalone cleanup revision, or require the invoking root to increment and record the parent `change_revision` after the Executor's returned changes and before continuing.
-   - For `no-op`, retain the input revision.
-   - Record changed files and invalidated evidence with that final revision. If the revision authority cannot record the new state, return `blocked: final revision unavailable`.
-6. Assign `csx-verifier` the final evidence revision, original goal and invariants, allowed scope, pre-cleanup and final diffs, Executor report, exact behavior-lock verification, expected result, and failure signal.
-7. Require the Verifier to echo the final evidence revision, inspect that final state, rerun the same verification when possible, and return `PASS`, `PARTIAL`, or `FAIL` with an evidence matrix. A missing or mismatched revision and missing, stale, or mismatched evidence cannot pass.
-8. Report `passed/cleaned` or `passed/no-op` only when the Executor result is successful and the Verifier returns `PASS` for the final evidence revision. Any other Verifier verdict is `blocked`.
+   - run the assigned behavior lock before editing and stop if it fails;
+   - inspect only owned changed files and corresponding tests;
+   - look for speculative or masking fallbacks, duplicated logic, dead code, unnecessary abstraction or indirection, ownership violations, and swallowed or misleading errors;
+   - separate safe cleanup from behavior, public-interface, data-shape, security, concurrency, migration, dependency, or architecture changes;
+   - apply one safe smell category at a time using the smallest diff;
+   - return `no-op` instead of manufacturing an edit;
+   - run the exact same behavior lock after the final state;
+   - return `cleaned`, `no-op`, or `blocked` with revision, files, before/after commands and raw results, removed smells, blockers, and residual risk.
+4. Stop on `blocked`, a failing baseline or final behavior lock, a changed verification command, scope expansion, or revision mismatch. Do not ask another role to repair it inside this skill.
+5. Establish the final evidence revision:
+   - for `cleaned`, increment the standalone revision or require the invoking root to increment and record the parent revision after returned changes;
+   - for `no-op`, retain the input revision;
+   - record changed paths and the specifically invalidated evidence.
+6. Report `passed/cleaned` or `passed/no-op` only when the Executor's before and after behavior locks both succeed unchanged and its final state matches the final evidence revision.
+
+## Proportionality Boundary
+
+- Cleanup is not a second implementation pass.
+- Do not introduce new edge cases, platforms, threat models, abstractions, tests, or acceptance criteria.
+- Do not turn an optional hardening opportunity into a blocker.
+- When a smell cannot be removed safely within the existing behavior lock and ownership, leave it as residual risk or a follow-up.
+- Perform one bounded cleanup pass only.
 
 ## Escalation Boundary
 
-The Executor must not make a cleanup when it requires a behavior decision, changes an accepted requirement, crosses the assigned file boundary, or needs architectural judgment. Return it to the leader as a blocker with the location, risk, and decision needed.
+The Executor must not clean when doing so requires a behavior decision, changes an accepted requirement, crosses ownership, or needs architectural judgment. Return a blocker with the location, risk, and decision needed.
 
-Do not create OMX, Ralph, HUD, ledger, runtime-state, or nested planning machinery. This skill performs one bounded cleanup pass and verification only.
+Do not create nested planning, runtime-state, ledger, or subagent machinery.
 
 ## Report
 
-Return and record:
-
 ```markdown
 ## Deslop Report: <goal id>
-- Scope: <changed files and corresponding tests>
+- Scope: <changed files and tests>
 - Input evidence revision: <revision>
-- Final evidence revision: <revision echoed by Verifier>
-- Behavior lock: <command/scenario and result>
+- Final evidence revision: <revision>
+- Behavior lock before: <exact command/scenario and result>
 - Result: passed/cleaned | passed/no-op | blocked
-- Smell removed: <one or more categories, or none>
-- Files changed: <paths, or none>
-- Post-deslop verification: <same command/scenario and result>
-- Independent verification: PASS | PARTIAL | FAIL | unavailable
+- Smell removed: <categories or none>
+- Files changed: <paths or none>
+- Behavior lock after: <same command/scenario and result>
 - Residual risk: <remaining risk or none>
 - Escalation: <decision required or none>
 ```
 
-Never report `passed` unless the original behavior-lock verification succeeded after the final cleanup state and `csx-verifier` returned `PASS`.
+Never report `passed` unless the exact same behavior lock succeeded before and after the final cleanup state and the final evidence revision matches.

@@ -76,6 +76,14 @@ The Planner assignment must map every acceptance criterion to at least one row:
 
 The Critic assignment must reject vague verification such as "works", "fast", or "robust" unless the plan defines an observable threshold.
 
+Apply these proportionality rules:
+
+- Use the smallest evidence set that directly proves the accepted criteria and relevant failure signals. One scenario may cover several related criteria.
+- Separate accepted scope and concrete change-induced safety or regression risks from optional hardening. Do not make new extremes, environments, threat models, or compatibility promises blocking plan requirements.
+- Default to one full suite in the primary environment plus bounded smoke coverage in other supported environments affected by the change. Require full cross-environment matrices only when the accepted input or changed boundary requires them.
+- If a support limit is undefined and choosing it changes the implementation, return it as a user decision rather than planning for an unbounded domain.
+- The Critic must reject duplicated verification rows and scope-expanding hardening presented as required work.
+
 ## Planner Body Shape
 
 The Planner owns and returns this complete immutable body:

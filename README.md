@@ -170,11 +170,14 @@ cannot enter execution.
 the Planner to split it into bounded `G001...Gnnn` execution goals in
 `.csx/goals/`. Executors own all implementation and rework. The root invokes
 scoped `csx-deslop` cleanup after implementation rather than asking a leaf
-Executor to start another workflow. `csx-verifier` independently gates scoped
-goal evidence and the integrated cumulative acceptance claim. When all
-execution goals are ready, the unchanged complete diff must also pass
-`csx-code-review`; failed evidence or findings return affected goals to rework,
-and any later code change invalidates the earlier verification and approval.
+Executor to start another workflow. Deslop proves behavior preservation by
+running the same behavior lock before and after one bounded cleanup pass; it
+does not spawn a separate verifier. When all execution goals are ready, the
+root runs the accepted cumulative verification once and the unchanged complete
+diff must pass `csx-code-review`. Findings outside accepted scope or concrete
+change-induced safety and regression risks are recorded as optional hardening
+rather than silently expanding the goal. `csx-verifier` remains installed as a
+general role, but `csx-start-goal` and `csx-deslop` do not invoke it.
 
 ## Uninstall
 
