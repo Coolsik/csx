@@ -24,6 +24,22 @@ Constraints:
 Stop conditions:
 ```
 
+## Subagent Output and Liveness Policy
+
+Apply this policy to every direct subagent spawn or resume in this skill.
+
+- Do not set or request a fixed token count. Require the smallest complete deliverable that preserves every required field, cited fact, evidence boundary, verdict, blocker, and stop condition.
+- Omit request restatement, generic advice, duplicated evidence, and unrelated exploration. Control workload through explicit scope, required checks, output shape, and stop conditions.
+- If the bounded assignment cannot be completed with the available evidence, return the skill's missing-evidence or blocked vocabulary instead of dropping required content, inventing facts, or broadening scope.
+- After dispatch, allow at least five minutes before inactivity handling unless the agent returns a hard failure.
+- After that initial grace period, if three consecutive minutes pass without new observable activity, measured from the later of the grace-period end or the last activity, send exactly one status check. Require the current step, last completed evidence, any running tool or command, blocker, and next action.
+- After the status check, allow two additional minutes for activity. If none arrives, terminate the inactive agent and confirm termination before creating a replacement.
+- Create at most one availability replacement for that direct assignment. Give it a unique task name, `fork_turns: "none"`, the complete original assignment, and all validated inputs and evidence. Never run the replacement concurrently with the agent it replaces.
+- If the replacement also becomes inactive under this policy, report the required role as unavailable using this skill's existing failure vocabulary. Do not create another replacement.
+- Observable activity includes a progress or result message and an observable tool or command start or completion. A tool or command known to still be running is not agent inactivity; follow that operation's own timeout and stop conditions.
+- This skill monitors only its direct subagent calls. A child skill monitors the agents it calls. Availability replacement does not consume or relax normal revision, review, or rework limits.
+- Use the environment's existing agent controls. Do not implement a custom runner, background service, or hard-kill timer for this policy.
+
 ## Operating Rules
 
 - Ask the highest-risk question first. Ask up to three questions together only when they are independent: no answer can change another question's necessity or options.
@@ -59,7 +75,7 @@ For a non-trivial spec, use the installed csx roles:
 - After repository evidence is available for brownfield work, assign `csx-analyst` the original request, retained decisions, prompt-safe summary when present, current evidence packet, and the required analyst deliverable below.
 - For greenfield work with no repository dependency, the Analyst may start without an Explorer packet. Do not create an artificial repository lane.
 
-Use unique task names, `fork_turns: "none"`, explicit stop conditions, and a combined cap of about 4,000 tokens. The main context owns user questions and writes the final artifact from the accepted Analyst result.
+Use unique task names, `fork_turns: "none"`, explicit stop conditions, and the common output discipline. The main context owns user questions and writes the final artifact from the accepted Analyst result.
 
 If `csx-analyst`, or a required brownfield `csx-explorer`, is missing, ask the user to rerun `csx install` for the intended scope and stop with `BLOCKED: required csx role unavailable`. Do not replace the missing role with root-authored repository or requirements analysis.
 

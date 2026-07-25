@@ -24,6 +24,22 @@ Constraints:
 Stop conditions:
 ```
 
+## Subagent Output and Liveness Policy
+
+Apply this policy to every direct subagent spawn or resume in this skill.
+
+- Do not set or request a fixed token count. Require the smallest complete deliverable that preserves every required field, cited fact, evidence boundary, verdict, blocker, and stop condition.
+- Omit request restatement, generic advice, duplicated evidence, and unrelated exploration. Control workload through explicit scope, required checks, output shape, and stop conditions.
+- If the bounded assignment cannot be completed with the available evidence, return the skill's missing-evidence or blocked vocabulary instead of dropping required content, inventing facts, or broadening scope.
+- After dispatch, allow at least five minutes before inactivity handling unless the agent returns a hard failure.
+- After that initial grace period, if three consecutive minutes pass without new observable activity, measured from the later of the grace-period end or the last activity, send exactly one status check. Require the current step, last completed evidence, any running tool or command, blocker, and next action.
+- After the status check, allow two additional minutes for activity. If none arrives, terminate the inactive agent and confirm termination before creating a replacement.
+- Create at most one availability replacement for that direct assignment. Give it a unique task name, `fork_turns: "none"`, the complete original assignment, and all validated inputs and evidence. Never run the replacement concurrently with the agent it replaces.
+- If the replacement also becomes inactive under this policy, report the required role as unavailable using this skill's existing failure vocabulary. Do not create another replacement.
+- Observable activity includes a progress or result message and an observable tool or command start or completion. A tool or command known to still be running is not agent inactivity; follow that operation's own timeout and stop conditions.
+- This skill monitors only its direct subagent calls. A child skill monitors the agents it calls. Availability replacement does not consume or relax normal revision, review, or rework limits.
+- Use the environment's existing agent controls. Do not implement a custom runner, background service, or hard-kill timer for this policy.
+
 ## Scope
 
 Review the current diff unless the user names files, commits, or a PR branch. Preserve unrelated user work.
@@ -46,7 +62,7 @@ Record `csx-architect: skipped-trivial` when no unresolved architectural boundar
 
 Only `accepted-scope defect` and `change-induced safety/regression` findings may produce `REQUEST CHANGES` or `BLOCK`. `optional hardening` is non-blocking follow-up material. A security or integrity defect introduced by the change is not optional merely because the original request did not name the attack or failure mode.
 
-Use unique task names, `fork_turns: "none"`, lane-specific stop conditions, and a cap of 3,000 tokens per lane. Wait for every required lane. If `csx-code-reviewer`, or a required Architect lane, is unavailable, ask the user to rerun `csx install`; do not report `APPROVE`. Report `COMMENT` with `required csx role unavailable`.
+Use unique task names, `fork_turns: "none"`, lane-specific stop conditions, and the output discipline above. Wait for every required lane. If `csx-code-reviewer`, or a required Architect lane, is unavailable, ask the user to rerun `csx install`; do not report `APPROVE`. Report `COMMENT` with `required csx role unavailable`.
 
 ## Composite Verdict
 

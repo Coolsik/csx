@@ -85,6 +85,51 @@ test("every skill constructs complete subagent assignments", async () => {
   }
 });
 
+test("every skill uses complete output discipline without fixed token caps", async () => {
+  const forbidden = [
+    /\b\d[\d,]*\s+tokens?\b/i,
+    /^## Token Budget$/m,
+    /\btoken budgets?\b/i,
+    /\blane cap\b/i,
+    /\bcombined cap\b/i,
+    /\bfinal synthesis cap\b/i,
+  ];
+
+  for (const name of skillNames) {
+    const skill = await readSkill(name);
+    assert.match(skill, /^## Subagent Output and Liveness Policy$/m);
+    assert.match(skill, /Do not set or request a fixed token count/);
+    assert.match(skill, /smallest complete deliverable/);
+    assert.match(skill, /preserves every required field, cited fact, evidence boundary, verdict, blocker, and stop condition/);
+    assert.match(skill, /return the skill's missing-evidence or blocked vocabulary/);
+    assert.match(skill, /instead of dropping required content, inventing facts, or broadening scope/);
+    for (const pattern of forbidden) {
+      assert.doesNotMatch(skill, pattern, `${name} must not contain fixed token-cap guidance ${pattern}`);
+    }
+  }
+});
+
+test("every skill applies the common activity-aware subagent liveness policy", async () => {
+  for (const name of skillNames) {
+    const skill = await readSkill(name);
+    assert.match(skill, /Apply this policy to every direct subagent spawn or resume in this skill/);
+    assert.match(skill, /allow at least five minutes before inactivity handling/);
+    assert.match(skill, /three consecutive minutes pass without new observable activity/);
+    assert.match(skill, /measured from the later of the grace-period end or the last activity/);
+    assert.match(skill, /send exactly one status check/);
+    assert.match(skill, /allow two additional minutes for activity/);
+    assert.match(skill, /terminate the inactive agent and confirm termination before creating a replacement/);
+    assert.match(skill, /Create at most one availability replacement for that direct assignment/);
+    assert.match(skill, /Never run the replacement concurrently with the agent it replaces/);
+    assert.match(skill, /If the replacement also becomes inactive under this policy/);
+    assert.match(skill, /A tool or command known to still be running is not agent inactivity/);
+    assert.match(skill, /This skill monitors only its direct subagent calls/);
+    assert.match(skill, /A child skill monitors the agents it calls/);
+    assert.match(skill, /Use the environment's existing agent controls/);
+    assert.match(skill, /Do not implement a custom runner, background service, or hard-kill timer/);
+  }
+});
+
 test("csx-analyze delegates investigation and final synthesis to Explorer", async () => {
   const skill = await readSkill("csx-analyze");
 
@@ -100,6 +145,10 @@ test("csx-analyze delegates investigation and final synthesis to Explorer", asyn
   assert.match(skill, /`Evidence`, `Inference`, or `Unknown`/);
   assert.match(skill, /`High`, `Medium`, or `Low` confidence/);
   assert.match(skill, /must not replace a required Explorer result with self-authored repository analysis/);
+  assert.match(skill, /Simple lookup: 1-3 files/);
+  assert.match(skill, /Cross-file behavior: 4-8 files/);
+  assert.match(skill, /stop after two search waves unless new evidence changes the ranking/);
+  assert.match(skill, /Keep the final synthesis proportional to the question/);
 });
 
 test("csx-spec delegates requirements judgment and spec content to Analyst", async () => {

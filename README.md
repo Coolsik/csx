@@ -161,6 +161,20 @@ orchestration, user decisions, state, artifacts, and handoffs; agents own the
 assigned investigation, analysis, planning, implementation, verification, or
 review result.
 
+Skills do not impose fixed token counts on subagents. They require the smallest
+complete deliverable, preserve required evidence and verdict fields, and bound
+work through scope, output shape, stop conditions, and existing workflow retry
+limits. Missing evidence must be reported explicitly rather than hidden by
+truncating required content.
+
+Every direct subagent call uses the same activity-aware liveness policy: allow
+an initial five-minute grace period, send one status check after a further three
+minutes without observable activity, and allow two more minutes before
+terminating the inactive agent. Confirm termination before starting at most one
+replacement with the complete assignment. A tool or command known to still be
+running is not inactivity, and child skills monitor only their own direct
+subagents.
+
 `csx-plan` and `csx-plan-pro` produce versioned planning artifacts under
 `.csx/plans/`. A revised draft must be reviewed again, and `csx-plan-pro`
 requires Architect `CLEAR` plus Critic `APPROVED` for the same draft version.
