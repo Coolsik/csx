@@ -5,17 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { discoverCodexModels } from "../lib/codex-models.js";
-import { AGENT_NAMES, cloneMatrix, presetMatrix } from "../lib/presets.js";
+import { AGENT_NAMES, LEGACY_VERIFIER_NAME, ROLE_NAMES, cloneMatrix, presetMatrix } from "../lib/presets.js";
 import { applySetup, builtInPresets, codexModelContext, CUSTOM_PRESETS_FILE, readAgentMatrix, readCustomPresets, requestUniqueCustomPresetName, selectSetupScope, setupLayout } from "../lib/setup.js";
-import { install } from "../lib/install.js";
+import { LEADER_MANAGED_END, LEADER_MANAGED_START, install } from "../lib/install.js";
 import { RECEIPT_NAME } from "../lib/installation-state.js";
 import { __setTransactionTestHooks, beginTransaction } from "../lib/transaction.js";
 import { acquireRootLock, controlPath, TransactionLockError } from "../lib/transaction-lock.js";
 
 const catalog = [
-  { model: "gpt-5.6-luna", efforts: ["low", "high"] },
-  { model: "gpt-5.6-terra", efforts: ["low", "high", "xhigh"] },
-  { model: "gpt-5.6-sol", efforts: ["low", "high", "xhigh"] }
+  { model: "gpt-5.6-luna", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { model: "gpt-5.6-terra", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { model: "gpt-5.6-sol", efforts: ["low", "medium", "high", "xhigh", "max"] }
 ];
 const declaredTransaction = (onDeclare, transaction) => async ({ createDeclaration }) => {
   onDeclare?.(await createDeclaration());
@@ -25,20 +25,23 @@ async function createSetupFixture(root, matrix, { receiptMatrix, customPresets }
   const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
   const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
   await mkdir(layout.agentsRoot, { recursive: true });
-  await writeFile(layout.configPath, "# preserve this TOML\n");
+  await writeFile(layout.configPath, `${LEADER_MANAGED_START}\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n${LEADER_MANAGED_END}\n\n# preserve this TOML\n`);
   for (const [index, path] of paths.entries()) {
     const name = AGENT_NAMES[index];
     await writeFile(path, `name = "${name}"\nmodel = "${matrix[name].model}"\nmodel_reasoning_effort = "${matrix[name].reasoning}"\nextra = "preserved"\n`);
   }
   const receiptPath = join(layout.configRoot, RECEIPT_NAME);
   const receipt = { root: layout.root, files: paths };
-  if (receiptMatrix !== undefined) receipt.setupAgentMatrix = { version: 1, agents: receiptMatrix };
+  if (receiptMatrix !== undefined) receipt.setupAgentMatrix = { version: 2, roles: receiptMatrix };
   await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
   const customPath = join(layout.configRoot, CUSTOM_PRESETS_FILE);
   if (customPresets !== undefined) {
-    await writeFile(customPath, `${JSON.stringify({ version: 1, presets: customPresets }, null, 2)}\n`);
+    await writeFile(customPath, `${JSON.stringify({ version: 2, presets: customPresets }, null, 2)}\n`);
   }
   return { layout, paths, receiptPath, customPath };
+}
+function onlyAgents(matrix) {
+  return Object.fromEntries(AGENT_NAMES.map((name) => [name, matrix[name]]));
 }
 async function snapshotTree(root, relative = "") {
   const result = {};
@@ -68,41 +71,24 @@ test("setup selects a receipt-owned project, rejects unmanaged project configura
   assert.equal(CUSTOM_PRESETS_FILE, "csx-model-presets.json");
 });
 
-test("Low, Medium, and payload-derived High define every agent", async () => {
-  const expected = {
-    Low: {
-      "csx-analyst": { model: "gpt-5.6-luna", reasoning: "high" },
-      "csx-architect": { model: "gpt-5.6-terra", reasoning: "high" },
-      "csx-code-reviewer": { model: "gpt-5.6-terra", reasoning: "xhigh" },
-      "csx-critic": { model: "gpt-5.6-terra", reasoning: "xhigh" },
-      "csx-executor": { model: "gpt-5.6-luna", reasoning: "low" },
-      "csx-explorer": { model: "gpt-5.6-terra", reasoning: "low" },
-      "csx-planner": { model: "gpt-5.6-luna", reasoning: "high" },
-      "csx-verifier": { model: "gpt-5.6-terra", reasoning: "xhigh" }
-    },
-    Medium: {
-      "csx-analyst": { model: "gpt-5.6-terra", reasoning: "high" },
-      "csx-architect": { model: "gpt-5.6-sol", reasoning: "high" },
-      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "xhigh" },
-      "csx-critic": { model: "gpt-5.6-sol", reasoning: "xhigh" },
-      "csx-executor": { model: "gpt-5.6-terra", reasoning: "low" },
-      "csx-explorer": { model: "gpt-5.6-sol", reasoning: "low" },
-      "csx-planner": { model: "gpt-5.6-terra", reasoning: "high" },
-      "csx-verifier": { model: "gpt-5.6-sol", reasoning: "xhigh" }
-    }
-  };
-  for (const [name, matrix] of Object.entries(expected)) assert.deepEqual(presetMatrix(name), matrix);
+test("Efficient, Balanced, and Strong define Leader plus seven agents", async () => {
   const builtIns = await builtInPresets();
-  assert.deepEqual(Object.keys(builtIns.High), AGENT_NAMES);
-  assert.equal(builtIns.High["csx-explorer"].model, "gpt-5.6-luna");
+  assert.deepEqual(Object.keys(builtIns), ["Efficient", "Balanced", "Strong"]);
+  for (const matrix of Object.values(builtIns)) assert.deepEqual(Object.keys(matrix), ROLE_NAMES);
+  assert.deepEqual(builtIns.Balanced.leader, { model: "gpt-5.6-luna", reasoning: "max" });
+  assert.deepEqual(builtIns.Strong["csx-architect"], { model: "gpt-5.6-sol", reasoning: "xhigh" });
+  assert.equal(Object.values(builtIns).flatMap(Object.values).some(({ model }) => model.includes("terra")), false);
 });
-test("preset names normalize and matrices reject missing or extra agents", () => {
-  assert.deepEqual(presetMatrix(" low "), presetMatrix("Low"));
-  const matrix = presetMatrix("Low");
-  assert.throws(() => cloneMatrix({ ...matrix, unexpected: { model: "x", reasoning: "low" } }), /exactly the eight/);
+test("preset names normalize, retain legacy aliases, and reject missing or extra roles", () => {
+  assert.deepEqual(presetMatrix(" efficient "), presetMatrix("Efficient"));
+  assert.deepEqual(presetMatrix("low"), presetMatrix("Efficient"));
+  assert.deepEqual(presetMatrix("medium"), presetMatrix("Balanced"));
+  assert.deepEqual(presetMatrix("high"), presetMatrix("Strong"));
+  const matrix = presetMatrix("Efficient");
+  assert.throws(() => cloneMatrix({ ...matrix, unexpected: { model: "x", reasoning: "low" } }), /leader and the seven/);
   const missing = { ...matrix };
   delete missing["csx-explorer"];
-  assert.throws(() => cloneMatrix(missing), /exactly the eight/);
+  assert.throws(() => cloneMatrix(missing), /leader and the seven/);
 });
 test("setup model probes target the selected root and resolved CODEX_HOME", async () => {
   const layout = setupLayout({ cwd: "/work/project", env: { HOME: "/home/test" } }).project;
@@ -129,7 +115,7 @@ test("setup rejects a catalog-invalid pair before creating a transaction or writ
     const matrix = presetMatrix("Low");
     const { layout, paths } = await createSetupFixture(root, matrix, { receiptMatrix: matrix });
     const invalid = cloneMatrix(matrix);
-    invalid[AGENT_NAMES[0]] = { model: "gpt-5.6-luna", reasoning: "xhigh" };
+    invalid[AGENT_NAMES[0]] = { model: "gpt-5.6-luna", reasoning: "ultra" };
     const before = await snapshotTree(root);
     let transactions = 0;
     await assert.rejects(
@@ -246,7 +232,7 @@ test("setup rejects baseline agent drift with zero transaction writes or commits
           };
         }
       }),
-      /agent matrix changed after preview/
+      /role matrix changed after preview/
     );
     assert.equal(writes, 0);
     assert.equal(commits, 0);
@@ -260,15 +246,15 @@ test("setup snapshots the complete installation target while limiting writes to 
   try {
     const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
     await mkdir(layout.agentsRoot, { recursive: true });
-    await writeFile(layout.configPath, "# preserve this TOML\n");
     const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
     const matrix = presetMatrix("Low");
+    await writeFile(layout.configPath, `${LEADER_MANAGED_START}\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n${LEADER_MANAGED_END}\n\n# preserve this TOML\n`);
     for (const [index, path] of paths.entries()) {
       const value = matrix[AGENT_NAMES[index]];
       await writeFile(path, `name = \"${AGENT_NAMES[index]}\"\nmodel = \"${value.model}\"\nmodel_reasoning_effort = \"${value.reasoning}\"\nextra = \"preserved\"\n`);
     }
     const receiptPath = join(layout.configRoot, ".csx-install-receipt.json");
-    await writeFile(receiptPath, JSON.stringify({ root, files: paths }));
+    await writeFile(receiptPath, JSON.stringify({ root, files: paths, setupAgentMatrix: { version: 2, roles: matrix } }));
     matrix[AGENT_NAMES[0]] = { model: "gpt-5.6-terra", reasoning: "high" };
     let request; let initialSnapshotSet; let finalProbe;
     const writes = [];
@@ -284,7 +270,7 @@ test("setup snapshots the complete installation target while limiting writes to 
     assert.deepEqual(new Set(initialSnapshotSet), new Set([...paths, layout.configPath, receiptPath]));
     assert.match(writes[0].text, /extra = "preserved"/);
     const receiptWrite = writes.find((write) => write.path === receiptPath);
-    assert.deepEqual(JSON.parse(receiptWrite.text).setupAgentMatrix, { version: 1, agents: matrix });
+    assert.deepEqual(JSON.parse(receiptWrite.text).setupAgentMatrix, { version: 2, roles: matrix });
     assert.deepEqual(finalProbe, { cwd: root, env: { HOME: root, CODEX_HOME: join(root, ".codex") } });
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -327,7 +313,7 @@ test("setup accepts the complete receipt produced by a real install", async () =
     matrix["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
     const result = await applySetup({ layout, matrix, catalog, customPresetName: "Team-derived", env: { HOME: root } });
     assert.equal(result.changed, true);
-    assert.deepEqual(await readAgentMatrix(layout.agentsRoot), matrix);
+    assert.deepEqual(await readAgentMatrix(layout.agentsRoot), onlyAgents(matrix));
     assert.deepEqual((await readCustomPresets({ env: { HOME: root } })).presets["Team-derived"], matrix);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -347,10 +333,10 @@ test("setup rewrites legal multiline assignments and records the effective matri
     const receipt = JSON.parse(await readFile(join(layout.configRoot, RECEIPT_NAME), "utf8"));
 
     assert.equal(result.changed, true);
-    assert.match(updated, /^\uFEFF# retained\r\nmodel = "gpt-5\.6-luna"\r\nmodel_reasoning_effort = "high"\r\n/);
+    assert.match(updated, /^\uFEFF# retained\r\nmodel = "gpt-5\.6-luna"\r\nmodel_reasoning_effort = "xhigh"\r\n/);
     assert.ok(updated.endsWith('prompt = """\r\nPreserve\r\nthese lines\r\n"""\r\n'));
-    assert.deepEqual(await readAgentMatrix(layout.agentsRoot), matrix);
-    assert.deepEqual(receipt.setupAgentMatrix, { version: 1, agents: matrix });
+    assert.deepEqual(await readAgentMatrix(layout.agentsRoot), onlyAgents(matrix));
+    assert.deepEqual(receipt.setupAgentMatrix, { version: 2, roles: matrix });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -368,7 +354,7 @@ test("setup persists receipt drift without agent changes and no-ops when the rec
     assert.equal(result.changed, true);
     assert.deepEqual(result.paths, [receiptPath]);
     assert.deepEqual(writes.map(({ path }) => path), [receiptPath]);
-    assert.deepEqual(JSON.parse(writes[0].text).setupAgentMatrix, { version: 1, agents: matrix });
+    assert.deepEqual(JSON.parse(writes[0].text).setupAgentMatrix, { version: 2, roles: matrix });
     assert.deepEqual(await Promise.all(paths.map((path) => readFile(path))), agentBytes);
 
     await writeFile(receiptPath, writes[0].text);
@@ -424,7 +410,9 @@ test("real custom-only setup is followed immediately by an artifact-free no-op",
     assert.deepEqual(result.paths, [customPath]);
     assert.deepEqual(writes, [customPath]);
     assert.equal((await stat(customPath)).mode & 0o777, 0o600);
-    assert.deepEqual(JSON.parse(await readFile(customPath, "utf8")).presets.Team, matrix);
+    const savedCustom = JSON.parse(await readFile(customPath, "utf8"));
+    assert.equal(savedCustom.version, 2);
+    assert.deepEqual(savedCustom.presets.Team, matrix);
     assert.deepEqual(await Promise.all(trackedPaths.map((path) => readFile(path))), beforeBytes);
     assert.deepEqual(await Promise.all(trackedPaths.map(async (path) => (await stat(path)).mode & 0o777)), beforeModes);
 
@@ -479,10 +467,34 @@ test("selectedAgents rejects target changes outside the selected subset before w
           rollback: async () => {}
         })
       }),
-      /unselected agent settings changed after preview/
+      /unselected role settings changed after preview/
     );
     assert.equal(writes, 0);
     assert.equal(commits, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("setup directs a legacy verifier installation through install migration first", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-legacy-"));
+  try {
+    const matrix = presetMatrix("Balanced");
+    const { layout, paths, receiptPath } = await createSetupFixture(root, matrix, {
+      receiptMatrix: matrix
+    });
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    receipt.files.push(join(layout.agentsRoot, `${LEGACY_VERIFIER_NAME}.toml`));
+    await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+
+    await assert.rejects(
+      applySetup({
+        layout,
+        matrix,
+        catalog,
+        expectedFilesLoader: async () => paths
+      }),
+      /run `csx install` before `csx setup`/
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -524,7 +536,7 @@ test("Windows classifies transaction-lock refusal without creating control paths
 test("setup rejects reserved custom preset names regardless of case", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-setup-reserved-"));
   try {
-    for (const name of ["Low", "MEDIUM", "high", "cUsToM"]) {
+    for (const name of ["Low", "MEDIUM", "high", "Efficient", "BALANCED", "strong", "cUsToM"]) {
       await assert.rejects(
         applySetup({ matrix: presetMatrix("Low"), catalog, customPresetName: name, env: { HOME: root } }),
         /custom preset name is reserved/,
@@ -560,7 +572,7 @@ test("setup rejects built-in and custom matrix duplicates before creating a tran
         expectedFilesLoader: async () => paths,
         transactionFactory
       }),
-      /matrix already exists as: Low/
+      /matrix already exists as: Efficient/
     );
     await assert.rejects(
       applySetup({
@@ -623,6 +635,26 @@ test("custom preset files require a versioned schema and unique normalized names
     await rm(root, { recursive: true, force: true });
   }
 });
+test("legacy custom presets drop verifier, add the Balanced Leader, and preserve new-name collisions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-custom-legacy-"));
+  try {
+    const path = join(root, ".codex", CUSTOM_PRESETS_FILE);
+    await mkdir(join(root, ".codex"), { recursive: true });
+    const agents = Object.fromEntries([...AGENT_NAMES, LEGACY_VERIFIER_NAME].map((name) => [
+      name,
+      { model: `legacy-${name}`, reasoning: "high" }
+    ]));
+    await writeFile(path, JSON.stringify({ version: 1, presets: { Efficient: agents } }));
+
+    const loaded = await readCustomPresets({ env: { HOME: root } });
+
+    assert.deepEqual(loaded.presets.Efficient.leader, presetMatrix("Balanced").leader);
+    assert.equal(loaded.presets.Efficient["csx-explorer"].model, "legacy-csx-explorer");
+    assert.equal(LEGACY_VERIFIER_NAME in loaded.presets.Efficient, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("setup rejects custom-preset drift after preview without writing either scope", async () => {
   const home = await mkdtemp(join(tmpdir(), "csx-setup-preview-drift-"));
   try {
@@ -631,14 +663,14 @@ test("setup rejects custom-preset drift after preview without writing either sco
     matrix["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
     const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
     await mkdir(layout.agentsRoot, { recursive: true });
-    await writeFile(layout.configPath, "# preserve this TOML\n");
+    await writeFile(layout.configPath, `${LEADER_MANAGED_START}\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n${LEADER_MANAGED_END}\n\n# preserve this TOML\n`);
     for (const [index, path] of paths.entries()) {
       const value = matrix[AGENT_NAMES[index]];
       await writeFile(path, `model = "${value.model}"\nmodel_reasoning_effort = "${value.reasoning}"\n`);
     }
-    await writeFile(join(layout.configRoot, ".csx-install-receipt.json"), JSON.stringify({ root: layout.root, files: paths }));
+    await writeFile(join(layout.configRoot, ".csx-install-receipt.json"), JSON.stringify({ root: layout.root, files: paths, setupAgentMatrix: { version: 2, roles: matrix } }));
     const presetsPath = join(layout.root, CUSTOM_PRESETS_FILE);
-    await writeFile(presetsPath, JSON.stringify({ version: 1, presets: {} }));
+    await writeFile(presetsPath, JSON.stringify({ version: 2, presets: {} }));
 
     let writes = 0;
     let commits = 0;
@@ -653,7 +685,7 @@ test("setup rejects custom-preset drift after preview without writing either sco
         env: { HOME: home },
         expectedFilesLoader: async () => paths,
         catalogLoader: async () => {
-          await writeFile(presetsPath, JSON.stringify({ version: 1, presets: { Outside: matrix } }));
+          await writeFile(presetsPath, JSON.stringify({ version: 2, presets: { Outside: matrix } }));
           return catalog;
         },
         transactionFactory: async (declaration) => {

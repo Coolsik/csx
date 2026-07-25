@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import React from "react";
 import { cleanup as cleanupInk, render as renderInk } from "ink-testing-library";
-import { AGENT_NAMES } from "../lib/presets.js";
+import { ROLE_NAMES } from "../lib/presets.js";
 import { escapeTerminalText } from "../lib/terminal-text.js";
 import {
   SetupTui,
@@ -26,13 +26,13 @@ const catalog = [
 ];
 
 function matrix(model = "luna", reasoning = "low") {
-  return Object.fromEntries(AGENT_NAMES.map((name) => [name, { model, reasoning }]));
+  return Object.fromEntries(ROLE_NAMES.map((name) => [name, { model, reasoning }]));
 }
 
 function presets() {
   return [
-    { name: "Low", matrix: matrix("luna", "low") },
-    { name: "Medium", matrix: matrix("terra", "high") },
+    { name: "Efficient", matrix: matrix("luna", "low") },
+    { name: "Balanced", matrix: matrix("terra", "high") },
     { name: "Saved", kind: "custom", matrix: matrix("sol", "xhigh") }
   ];
 }
@@ -70,17 +70,17 @@ test("matrix helpers use exact complete eight-role pairs", () => {
   const exact = matrix();
   assert.equal(matrixMatches(exact, structuredClone(exact)), true);
   const mismatch = structuredClone(exact);
-  mismatch[AGENT_NAMES[0]].reasoning = "high";
+  mismatch[ROLE_NAMES[0]].reasoning = "high";
   assert.equal(matrixMatches(exact, mismatch), false);
   const missing = structuredClone(exact);
-  delete missing[AGENT_NAMES[0]];
+  delete missing[ROLE_NAMES[0]];
   assert.equal(matrixMatches(exact, missing), false);
   assert.deepEqual(matchingPresetNames(exact, [
-    { name: "Low", matrix: exact },
+    { name: "Efficient", matrix: exact },
     { name: "Twin", kind: "custom", matrix: structuredClone(exact) },
     { name: "Other", matrix: mismatch }
-  ]), ["Low", "Twin"]);
-  assert.deepEqual(changedRows(exact, mismatch), [AGENT_NAMES[0]]);
+  ]), ["Efficient", "Twin"]);
+  assert.deepEqual(changedRows(exact, mismatch), [ROLE_NAMES[0]]);
 });
 
 test("model-first landing renders available models, role tags, and duplicate save state", () => {
@@ -88,11 +88,11 @@ test("model-first landing renders available models, role tags, and duplicate sav
   const frame = renderSetupState(state);
   assert.match(frame, /Models/);
   assert.match(frame, /> luna/);
-  for (const tag of ["EXPLORE", "ANALYST", "PLANNER", "ARCH", "CRITIC", "EXEC", "VERIFY", "REVIEW"]) {
+  for (const tag of ["LEADER", "EXPLORE", "ANALYST", "PLANNER", "ARCH", "CRITIC", "EXEC", "REVIEW"]) {
     assert.match(frame, new RegExp(`\\[${tag}\\] \\(low\\)`));
   }
   assert.match(frame, /Load preset/);
-  assert.match(frame, /Already saved as Low \[disabled\]/);
+  assert.match(frame, /Already saved as Efficient \[disabled\]/);
   assert.match(frame, /Review & apply/);
 });
 
@@ -107,9 +107,9 @@ test("single-role assignment follows model → role → effort and returns to mo
   state = down(state);
   state = enter(state);
   assert.equal(state.screen, "models");
-  assert.deepEqual(state.draftMatrix[AGENT_NAMES[0]], { model: "luna", reasoning: "high" });
-  assert.deepEqual(changedRows(state.baselineMatrix, state.draftMatrix), [AGENT_NAMES[0]]);
-  assert.match(renderSetupState(state), /\[EXPLORE\] \(high\)/);
+  assert.deepEqual(state.draftMatrix[ROLE_NAMES[0]], { model: "luna", reasoning: "high" });
+  assert.deepEqual(changedRows(state.baselineMatrix, state.draftMatrix), [ROLE_NAMES[0]]);
+  assert.match(renderSetupState(state), /\[LEADER\] \(high\)/);
   assert.match(renderSetupState(state), /Save custom preset/);
   assert.doesNotMatch(renderSetupState(state), /Already saved/);
 });
@@ -118,7 +118,7 @@ test("All roles assigns one selected model and effort to all eight roles", () =>
   let state = baseState();
   state = down(state, 2);
   state = enter(state);
-  state = down(state, AGENT_NAMES.length);
+  state = down(state, ROLE_NAMES.length);
   assert.match(renderSetupState(state), /> All roles/);
   state = enter(state);
   state = down(state, 2);
@@ -130,7 +130,7 @@ test("All roles assigns one selected model and effort to all eight roles", () =>
 
 test("effort defaults to the current role value only when the model matches", () => {
   const baseline = matrix();
-  baseline[AGENT_NAMES[0]] = { model: "terra", reasoning: "xhigh" };
+  baseline[ROLE_NAMES[0]] = { model: "terra", reasoning: "xhigh" };
   let state = baseState({ baselineMatrix: baseline });
   state = down(state);
   state = enter(state);
@@ -151,13 +151,13 @@ test("preset menu previews all roles, loads the full matrix, and clears stale pe
   assert.equal(state.screen, "presets");
   assert.match(renderSetupState(state), /\[EXPLORE\] luna\/low/);
   state = down(state);
-  assert.match(renderSetupState(state), /> Medium/);
+  assert.match(renderSetupState(state), /> Balanced/);
   assert.match(renderSetupState(state), /\[ARCH\] terra\/high/);
   state = enter(state);
   assert.equal(state.screen, "models");
   assert.deepEqual(state.draftMatrix, matrix("terra", "high"));
   assert.equal(state.customPresetName, undefined);
-  assert.match(renderSetupState(state), /Already saved as Medium \[disabled\]/);
+  assert.match(renderSetupState(state), /Already saved as Balanced \[disabled\]/);
 });
 
 test("custom preset name is staged, editable, and invalidated by a later matrix change", () => {
@@ -186,13 +186,14 @@ test("custom preset name is staged, editable, and invalidated by a later matrix 
 test("custom name validation remains trimmed, reserved, and case-insensitive", () => {
   assert.match(validateCustomPresetName("   "), /required/);
   assert.match(validateCustomPresetName(" HIGH "), /reserved/);
+  assert.match(validateCustomPresetName(" balanced "), /reserved/);
   assert.match(validateCustomPresetName(" team ", ["Team"]), /already exists/);
   assert.equal(validateCustomPresetName(" Fresh ", ["Team"]), null);
 
   let state = baseState({ customPresetNames: ["Team"] });
   state = {
     ...state,
-    draftMatrix: { ...state.draftMatrix, [AGENT_NAMES[0]]: { model: "luna", reasoning: "high" } },
+    draftMatrix: { ...state.draftMatrix, [ROLE_NAMES[0]]: { model: "luna", reasoning: "high" } },
     modelIndex: 4
   };
   state = enter(state);
@@ -205,16 +206,16 @@ test("custom name validation remains trimmed, reserved, and case-insensitive", (
 test("invalid assignments are visible and block save/review until repaired", () => {
   const baseline = matrix("removed", "max");
   let state = baseState({ baselineMatrix: baseline });
-  assert.deepEqual(invalidRows(state.draftMatrix, catalog), AGENT_NAMES);
-  assert.match(renderSetupState(state), /EXPLORE: removed\/max is unavailable/);
-  state = { ...state, modelIndex: catalog.length + AGENT_NAMES.length + 1 };
+  assert.deepEqual(invalidRows(state.draftMatrix, catalog), ROLE_NAMES);
+  assert.match(renderSetupState(state), /LEADER: removed\/max is unavailable/);
+  state = { ...state, modelIndex: catalog.length + ROLE_NAMES.length + 1 };
   state = enter(state);
   assert.equal(state.screen, "models");
   assert.match(state.error, /Repair unavailable/);
 
   state = { ...state, modelIndex: 0 };
   state = enter(state);
-  state = down(state, AGENT_NAMES.length);
+  state = down(state, ROLE_NAMES.length);
   state = enter(state);
   state = enter(state);
   assert.deepEqual(invalidRows(state.draftMatrix, catalog), []);
@@ -223,7 +224,7 @@ test("invalid assignments are visible and block save/review until repaired", () 
 test("review is read-only and Apply returns every changed role plus pending preset name", () => {
   let state = baseState();
   state = enter(state);
-  state = down(state, AGENT_NAMES.length);
+  state = down(state, ROLE_NAMES.length);
   state = enter(state);
   state = down(state);
   state = enter(state);
@@ -236,7 +237,7 @@ test("review is read-only and Apply returns every changed role plus pending pres
   assert.match(renderSetupState(state), /> Apply/);
   state = enter(state);
   assert.equal(state.result.outcome, "apply");
-  assert.deepEqual(state.result.selectedAgents, AGENT_NAMES);
+  assert.deepEqual(state.result.selectedAgents, ROLE_NAMES);
   assert.equal(state.result.customPresetName, "Team");
 });
 
@@ -288,7 +289,7 @@ test("tiny custom-name input pages without losing the raw pending text", () => {
     ...state,
     draftMatrix: {
       ...state.draftMatrix,
-      [AGENT_NAMES[0]]: { model: "luna", reasoning: "high" }
+      [ROLE_NAMES[0]]: { model: "luna", reasoning: "high" }
     },
     modelIndex: 4
   };
@@ -323,7 +324,7 @@ test("external terminal controls are visibly escaped without mutating Apply data
   const frame = renderSetupState(state);
   assert.match(frame, new RegExp(escapeTerminalText(rawModel).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(frame.replaceAll("\n", ""), /[\u0000-\u001f\u007f-\u009f\u202e]/u);
-  assert.equal(state.draftMatrix[AGENT_NAMES[0]].model, rawModel);
+  assert.equal(state.draftMatrix[ROLE_NAMES[0]].model, rawModel);
 });
 
 test("Ink renderer exposes model tags and accepts model-first input", async (t) => {

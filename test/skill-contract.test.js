@@ -13,7 +13,6 @@ const agentNames = [
   "csx-executor",
   "csx-explorer",
   "csx-planner",
-  "csx-verifier",
 ];
 const skillNames = [
   "csx-analyze",
@@ -300,7 +299,7 @@ test("spec and planning workflows keep support and verification proportional", a
   assert.match(planPro, /Default to one primary-environment full suite plus affected-environment smoke checks/);
 });
 
-test("start-goal and installer retain explicit execution and installed-role contracts", async () => {
+test("start-goal and installer retain explicit execution contracts without verifier", async () => {
   const [skill, installer, readme] = await Promise.all([
     readSkill("csx-start-goal"),
     readFile(resolve(root, "lib/install.js"), "utf8"),
@@ -311,8 +310,7 @@ test("start-goal and installer retain explicit execution and installed-role cont
   assert.match(skill, /For a csx pro plan, accept only `Decision: APPROVED`/);
   assert.match(skill, /Reject every `BLOCKED` plan/);
   assert.match(skill, /explicit `Start execution with \$csx-start-goal` selection/);
-  assert.match(installer, /"csx-verifier"/);
+  assert.doesNotMatch(installer, /"csx-verifier"/);
   assert.match(readme, /Agent prompts define general, workflow-independent roles/);
-  assert.match(readme, /`csx-verifier` remains installed as a\s+general role/);
-  assert.match(readme, /`csx-start-goal` and `csx-deslop` do not invoke it/);
+  assert.doesNotMatch(readme, /`csx-verifier` remains installed/);
 });

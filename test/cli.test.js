@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pty from "node-pty";
 import test from "node:test";
 import { install } from "../lib/install.js";
-import { AGENT_NAMES, presetMatrix } from "../lib/presets.js";
+import { AGENT_NAMES, ROLE_NAMES, presetMatrix } from "../lib/presets.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = resolve(root, "bin", "csx.js");
@@ -38,7 +38,7 @@ test("install and setup command boundaries reject invalid non-interactive use", 
 test("model-first PTY assigns one role and calls Apply exactly once", async () => {
   const fixture = await setupFixture();
   try {
-    const before = await readAgentMatrix(fixture.agentsRoot);
+    const before = await readRoleMatrix(fixture);
     const result = await runPty(fixture, harness, [
       ENTER,
       ENTER,
@@ -51,10 +51,10 @@ test("model-first PTY assigns one role and calls Apply exactly once", async () =
     assert.equal(result.harness.ok, true);
     assert.equal(result.harness.applyCount, 1);
     assert.equal(result.harness.result.changed, true);
-    assert.deepEqual(result.harness.changes, { agents: 1, receipt: 1, custom: 0 });
-    const after = await readAgentMatrix(fixture.agentsRoot);
-    assert.deepEqual(after[AGENT_NAMES[0]], { model: "gpt-5.6-sol", reasoning: "low" });
-    for (const agent of AGENT_NAMES.slice(1)) assert.deepEqual(after[agent], before[agent]);
+    assert.deepEqual(result.harness.changes, { agents: 0, config: 1, receipt: 1, custom: 0 });
+    const after = await readRoleMatrix(fixture);
+    assert.deepEqual(after.leader, { model: "gpt-5.6-sol", reasoning: "low" });
+    for (const agent of AGENT_NAMES) assert.deepEqual(after[agent], before[agent]);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -65,7 +65,7 @@ test("All roles plus a unique custom preset save commit atomically on final Appl
   try {
     const result = await runPty(fixture, harness, [
       ENTER,
-      ...repeat(DOWN, AGENT_NAMES.length),
+      ...repeat(DOWN, ROLE_NAMES.length),
       ENTER,
       ENTER,
       ...repeat(DOWN, 4),
@@ -79,8 +79,8 @@ test("All roles plus a unique custom preset save commit atomically on final Appl
     assert.equal(result.code, 0, result.output);
     assert.equal(result.harness.ok, true);
     assert.equal(result.harness.applyCount, 1);
-    assert.deepEqual(result.harness.changes, { agents: 8, receipt: 1, custom: 1 });
-    assert.deepEqual(await readAgentMatrix(fixture.agentsRoot), matrix("gpt-5.6-sol", "low"));
+    assert.deepEqual(result.harness.changes, { agents: 7, config: 1, receipt: 1, custom: 1 });
+    assert.deepEqual(await readRoleMatrix(fixture), matrix("gpt-5.6-sol", "low"));
     const custom = JSON.parse(await readFile(fixture.customPath, "utf8"));
     assert.deepEqual(custom.presets["Team-sol-low"], matrix("gpt-5.6-sol", "low"));
   } finally {
@@ -93,7 +93,7 @@ test("duplicate built-in/custom matrices render a disabled save row and write no
   const fixture = await setupFixture({ fixtureOnly: true, baselineMatrix: low });
   try {
     await writeFile(fixture.customPath, `${JSON.stringify({
-      version: 1,
+      version: 2,
       presets: { Team: low }
     })}\n`);
     const result = await runPty(fixture, harness, [
@@ -105,8 +105,8 @@ test("duplicate built-in/custom matrices render a disabled save row and write no
     assert.equal(result.harness.applyCount, 0);
     assert.equal(result.harness.hashesUnchanged, true);
     const frame = capturedFrame(result, "duplicate");
-    assert.match(frame, /Already saved as Low, Team \[disabled\]/);
-    assert.match(frame, /already saved as Low, Team/i);
+    assert.match(frame, /Already saved as Efficient, Team \[disabled\]/);
+    assert.match(frame, /already saved as Efficient, Team/i);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -127,7 +127,7 @@ test("Load preset previews role mappings and applies the selected full matrix", 
     assert.match(capturedFrame(result, "preset-preview"), /Load preset/);
     assert.match(capturedFrame(result, "preset-preview"), /\[EXPLORE\]/);
     assert.match(result.output, /Updated global csx setup/);
-    assert.deepEqual(await readAgentMatrix(fixture.agentsRoot), presetMatrix("Low"));
+    assert.deepEqual(await readRoleMatrix(fixture), presetMatrix("Efficient"));
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -139,7 +139,7 @@ test("top-level Esc cancels without Apply or file changes", async () => {
     const result = await runPty(fixture, harness, [ESC], { tracked: trackedFiles(fixture) });
     assert.equal(result.code, 0, result.output);
     assert.equal(result.harness.applyCount, 0);
-    assert.deepEqual(result.harness.changes, { agents: 0, receipt: 0, custom: 0 });
+    assert.deepEqual(result.harness.changes, { agents: 0, config: 0, receipt: 0, custom: 0 });
     assert.equal(result.harness.hashesUnchanged, true);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
@@ -176,7 +176,7 @@ test("unavailable baseline assignments can be repaired through All roles before 
   try {
     const result = await runPty(fixture, cli, [
       ENTER,
-      ...repeat(DOWN, AGENT_NAMES.length),
+      ...repeat(DOWN, ROLE_NAMES.length),
       ENTER,
       ENTER,
       ...repeat(DOWN, 5),
@@ -184,7 +184,7 @@ test("unavailable baseline assignments can be repaired through All roles before 
       ENTER
     ]);
     assert.equal(result.code, 0, result.output);
-    assert.deepEqual(await readAgentMatrix(fixture.agentsRoot), matrix("gpt-5.6-sol", "low"));
+    assert.deepEqual(await readRoleMatrix(fixture), matrix("gpt-5.6-sol", "low"));
     assert.match(result.output, /Updated global csx setup/);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
@@ -223,7 +223,7 @@ test("raw Ctrl+D from a real PTY aborts after terminal cleanup", async () => {
 });
 
 function matrix(model, reasoning) {
-  return Object.fromEntries(AGENT_NAMES.map((agent) => [agent, { model, reasoning }]));
+  return Object.fromEntries(ROLE_NAMES.map((agent) => [agent, { model, reasoning }]));
 }
 
 function repeat(value, count) {
@@ -249,9 +249,9 @@ async function setupFixture({
   fixtureOnly = false,
   baselineMatrix,
   catalog = [
-    { model: "gpt-5.6-sol", efforts: ["low", "medium", "high", "xhigh"] },
-    { model: "gpt-5.6-luna", efforts: ["low", "medium", "high", "xhigh"] },
-    { model: "gpt-5.6-terra", efforts: ["low", "medium", "high", "xhigh"] }
+    { model: "gpt-5.6-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { model: "gpt-5.6-luna", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { model: "gpt-5.6-terra", efforts: ["low", "medium", "high", "xhigh", "max"] }
   ]
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "csx-pty-"));
@@ -262,20 +262,12 @@ async function setupFixture({
   const receiptPath = scope === "project"
     ? join(directory, ".codex", ".csx-install-receipt.json")
     : join(home, ".csx-install-receipt.json");
-  if (fixtureOnly) {
-    await cp(join(root, "payload", "agents"), agentsRoot, { recursive: true });
-    const files = AGENT_NAMES.map((name) => join(agentsRoot, `${name}.toml`));
-    await writeFile(receiptPath, `${JSON.stringify({
-      root: scope === "project" ? directory : home,
-      files
-    })}\n`);
-  } else {
-    await install({
-      scope,
-      projectRoot: scope === "project" ? directory : undefined,
-      env: { HOME: directory, CODEX_HOME: home }
-    });
-  }
+  await install({
+    scope,
+    projectRoot: scope === "project" ? directory : undefined,
+    env: { HOME: directory, CODEX_HOME: home }
+  });
+  const configPath = scope === "project" ? join(directory, ".codex", "config.toml") : join(home, "config.toml");
   if (baselineMatrix) {
     await Promise.all(AGENT_NAMES.map(async (name) => {
       const path = join(agentsRoot, `${name}.toml`);
@@ -284,8 +276,11 @@ async function setupFixture({
       const withModel = replaceFixtureAssignment(text, "model", pair.model);
       await writeFile(path, replaceFixtureAssignment(withModel, "model_reasoning_effort", pair.reasoning));
     }));
+    const config = await readFile(configPath, "utf8");
+    const withLeader = replaceFixtureAssignment(config, "model", baselineMatrix.leader.model);
+    await writeFile(configPath, replaceFixtureAssignment(withLeader, "model_reasoning_effort", baselineMatrix.leader.reasoning));
   }
-  const installedMatrix = await readAgentMatrix(agentsRoot);
+  const installedMatrix = await readRoleMatrix({ agentsRoot, configPath });
   await mkdir(bin);
   const server = join(bin, "codex.mjs");
   await writeFile(server, `import readline from "node:readline";\nconst catalog = ${JSON.stringify(catalog)};\nreadline.createInterface({ input: process.stdin }).on("line", (line) => { const request = JSON.parse(line); if (request.id && request.method === "initialize") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {} }) + "\\n"); if (request.id && request.method === "model/list") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { data: catalog.map(({ model, efforts }) => ({ model, hidden: false, supportedReasoningEfforts: efforts.map((reasoningEffort) => ({ reasoningEffort })) })), nextCursor: null } }) + "\\n"); });\n`);
@@ -298,6 +293,7 @@ async function setupFixture({
     home,
     bin,
     agentsRoot,
+    configPath,
     receiptPath,
     customPath: join(home, "csx-model-presets.json"),
     installedMatrix
@@ -325,9 +321,21 @@ async function readAgentMatrix(agentsRoot) {
   })));
 }
 
+async function readRoleMatrix(fixture) {
+  const config = await readFile(fixture.configPath, "utf8");
+  return {
+    leader: {
+      model: /(?:^|\n)model\s*=\s*"([^"]+)"/.exec(config)[1],
+      reasoning: /(?:^|\n)model_reasoning_effort\s*=\s*"([^"]+)"/.exec(config)[1]
+    },
+    ...await readAgentMatrix(fixture.agentsRoot)
+  };
+}
+
 function trackedFiles(fixture) {
   return {
     agents: AGENT_NAMES.map((name) => join(fixture.agentsRoot, `${name}.toml`)),
+    config: [fixture.configPath],
     receipt: [fixture.receiptPath],
     custom: [fixture.customPath]
   };

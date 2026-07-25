@@ -9,11 +9,14 @@ import {
   FEATURE_MANAGED_END,
   FEATURE_MANAGED_START,
   install as installCore,
+  LEADER_MANAGED_END,
+  LEADER_MANAGED_START,
   MANAGED_END,
   MANAGED_START,
   uninstall as uninstallCore,
   windowsCommand
 } from "../lib/install.js";
+import { AGENT_NAMES, LEGACY_VERIFIER_NAME, presetMatrix } from "../lib/presets.js";
 
 const roots = [];
 
@@ -56,7 +59,7 @@ const transactionApi = {
 const install = (options) => installCore({ ...options, transactionApi });
 const uninstall = (options) => uninstallCore({ ...options, transactionApi });
 
-test("global install preserves existing config", async () => {
+test("global install applies Balanced Leader while preserving the original for uninstall", async () => {
   const home = await temporary("global home ");
   const codex = join(home, ".codex");
   await mkdir(codex, { recursive: true });
@@ -70,11 +73,73 @@ test("global install preserves existing config", async () => {
   assert.equal(existsSync(join(codex, "skills", "csx-deslop", "SKILL.md")), true);
   assert.equal(existsSync(join(codex, "skills", "csx-deslop", "agents", "openai.yaml")), true);
   assert.equal(existsSync(join(codex, "agents", "csx-planner.toml")), true);
+  assert.equal(existsSync(join(codex, "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
   const config = await readFile(join(codex, "config.toml"), "utf8");
-  assert.match(config, /model = "example"/);
+  assert.match(config, new RegExp(LEADER_MANAGED_START));
+  assert.match(config, new RegExp(LEADER_MANAGED_END));
+  assert.match(config, /model = "gpt-5\.6-luna"/);
+  assert.match(config, /model_reasoning_effort = "max"/);
+  assert.doesNotMatch(config, /model = "example"/);
   assert.match(config, new RegExp(MANAGED_START));
   assert.match(config, /\[\[hooks\.UserPromptSubmit\]\]/);
+  assert.doesNotMatch(config, /\[agents\.csx-verifier\]/);
   assert.match(config, /\[features\]\ndefault_mode_request_user_input = true/);
+
+  await uninstall({ cwd: join(home, "unrelated"), env: { HOME: home } });
+  assert.equal(await readFile(join(codex, "config.toml"), "utf8"), 'model = "example"\n');
+});
+
+test("repeat install migrates an exact legacy verifier receipt and restores the old Leader on uninstall", async () => {
+  const root = await temporary("legacy verifier migration ");
+  const configPath = join(root, ".codex", "config.toml");
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  const verifierPath = join(root, ".codex", "agents", `${LEGACY_VERIFIER_NAME}.toml`);
+  await install({ scope: "project", projectRoot: root });
+
+  const leaderRegion = new RegExp(
+    `${escapeRegExp(LEADER_MANAGED_START)}[\\s\\S]*?${escapeRegExp(LEADER_MANAGED_END)}\\n*`
+  );
+  let config = (await readFile(configPath, "utf8")).replace(
+    leaderRegion,
+    'model = "legacy-user-model"\nmodel_reasoning_effort = "high"\n\n'
+  );
+  config = config.replace(
+    "[[hooks.UserPromptSubmit]]",
+    `[agents.${LEGACY_VERIFIER_NAME}]\nconfig_file = "./agents/${LEGACY_VERIFIER_NAME}.toml"\n\n[[hooks.UserPromptSubmit]]`
+  );
+  await writeFile(configPath, config);
+  await writeFile(verifierPath, 'model = "legacy-verifier"\nmodel_reasoning_effort = "high"\n');
+
+  const legacy = presetMatrix("Balanced");
+  const legacyAgents = Object.fromEntries([
+    ...AGENT_NAMES,
+    LEGACY_VERIFIER_NAME
+  ].map((name) => [name, {
+    model: name === LEGACY_VERIFIER_NAME ? "legacy-verifier" : `saved-${name}`,
+    reasoning: "high"
+  }]));
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.files.push(verifierPath);
+  receipt.setupAgentMatrix = { version: 1, agents: legacyAgents };
+  delete receipt.leaderConfig;
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+
+  await install({ scope: "project", projectRoot: root });
+
+  assert.equal(existsSync(verifierPath), false);
+  const upgradedConfig = await readFile(configPath, "utf8");
+  assert.doesNotMatch(upgradedConfig, /\[agents\.csx-verifier\]/);
+  assert.match(upgradedConfig, /model = "gpt-5\.6-luna"/);
+  assert.match(upgradedConfig, /model_reasoning_effort = "max"/);
+  const upgradedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.equal(upgradedReceipt.files.includes(verifierPath), false);
+  assert.deepEqual(upgradedReceipt.setupAgentMatrix.roles.leader, legacy.leader);
+  assert.equal(upgradedReceipt.setupAgentMatrix.roles["csx-explorer"].model, "saved-csx-explorer");
+
+  await uninstall({ projectRoot: root });
+  const restored = await readFile(configPath, "utf8");
+  assert.match(restored, /model = "legacy-user-model"/);
+  assert.match(restored, /model_reasoning_effort = "high"/);
 });
 
 test("global install creates the default Codex home when absent", async () => {
@@ -314,10 +379,11 @@ test("repeat install retains valid receipt setup agent selections", async () => 
   const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
   const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
   receipt.setupAgentMatrix = {
-    version: 1,
-    agents: Object.fromEntries([
+    version: 2,
+    roles: Object.fromEntries([
+      "leader",
       "csx-explorer", "csx-analyst", "csx-planner", "csx-architect",
-      "csx-critic", "csx-executor", "csx-verifier", "csx-code-reviewer"
+      "csx-critic", "csx-executor", "csx-code-reviewer"
     ].map((agent) => [agent, { model: "saved-model", reasoning: "saved-effort" }]))
   };
   await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
@@ -327,6 +393,9 @@ test("repeat install retains valid receipt setup agent selections", async () => 
   const agent = await readFile(join(root, ".codex", "agents", "csx-explorer.toml"), "utf8");
   assert.match(agent, /model = "saved-model"/);
   assert.match(agent, /model_reasoning_effort = "saved-effort"/);
+  const config = await readFile(join(root, ".codex", "config.toml"), "utf8");
+  assert.match(config, /model = "saved-model"/);
+  assert.match(config, /model_reasoning_effort = "saved-effort"/);
 });
 
 test("install retains write, rollback, and close failures", async () => {

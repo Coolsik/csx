@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { AGENT_NAMES } from "../lib/presets.js";
+import { ROLE_NAMES } from "../lib/presets.js";
 import { runSetupCommand } from "../lib/setup-command.js";
 
 const catalog = [{ model: "model", efforts: ["low", "high"] }];
@@ -11,7 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = resolve(root, "bin", "csx.js");
 
 function matrix(reasoning = "low") {
-  return Object.fromEntries(AGENT_NAMES.map((name) => [name, { model: "model", reasoning }]));
+  return Object.fromEntries(ROLE_NAMES.map((name) => [name, { model: "model", reasoning }]));
 }
 
 function harness(overrides = {}) {
@@ -35,13 +35,13 @@ function harness(overrides = {}) {
       calls.push(["catalog", context]);
       return catalog;
     },
-    readAgentMatrixFn: async (agentsRoot) => {
-      calls.push(["baseline", agentsRoot]);
+    readSetupMatrixFn: async (selectedLayout) => {
+      calls.push(["baseline", selectedLayout]);
       return baseline;
     },
     builtInPresetsFn: async () => {
       calls.push(["builtins"]);
-      return { Low: matrix() };
+      return { Efficient: matrix() };
     },
     readCustomPresetsFn: async (options) => {
       calls.push(["custom", options]);
@@ -80,10 +80,32 @@ test("orchestration preserves preflight, discovery, load, and TUI order", async 
   assert.equal(tui.output, options.output);
   assert.equal(tui.errorOutput, options.errorOutput);
   assert.deepEqual(tui.presets.map(({ name, kind }) => [name, kind]), [
-    ["Low", undefined],
+    ["Efficient", undefined],
     ["Team", "custom"]
   ]);
   assert.deepEqual(tui.customPresetNames, ["Team"]);
+});
+
+test("a legacy custom preset colliding with a new built-in is labeled as custom", async () => {
+  let names;
+  const { deps } = harness({
+    readCustomPresetsFn: async () => ({
+      path: "/custom.json",
+      hash: null,
+      presets: { Efficient: matrix("high") }
+    }),
+    runSetupTuiFn: async (options) => {
+      names = options.presets.map(({ name, kind }) => [name, kind]);
+      return { outcome: "cancel" };
+    }
+  });
+
+  await runSetupCommand(options, deps);
+
+  assert.deepEqual(names, [
+    ["Efficient", undefined],
+    ["Efficient (custom)", "custom"]
+  ]);
 });
 
 test("unmanaged scope failure happens before catalog, TUI, Apply, or write-equivalent work", async () => {
@@ -152,14 +174,14 @@ test("CLI stderr boundary visibly escapes hostile error text without changing us
 
 test("Apply is called exactly once with isolated, validated transaction inputs", async () => {
   const final = matrix("high");
-  const selectedAgents = [AGENT_NAMES[0], AGENT_NAMES[3]];
+  const selectedAgents = [ROLE_NAMES[0], ROLE_NAMES[3]];
   let applyArgs;
   const { calls, deps, layout, baseline } = harness({
     runSetupTuiFn: async (tuiOptions) => {
       calls.push(["tui", tuiOptions]);
-      tuiOptions.baselineMatrix[AGENT_NAMES[0]].reasoning = "high";
+      tuiOptions.baselineMatrix[ROLE_NAMES[0]].reasoning = "high";
       tuiOptions.catalog[0].efforts.length = 0;
-      tuiOptions.presets[0].matrix[AGENT_NAMES[0]].reasoning = "high";
+      tuiOptions.presets[0].matrix[ROLE_NAMES[0]].reasoning = "high";
       return {
         outcome: "apply",
         matrix: final,
@@ -170,9 +192,9 @@ test("Apply is called exactly once with isolated, validated transaction inputs",
     applySetupFn: async (args) => {
       calls.push(["apply", args]);
       applyArgs = args;
-      args.matrix[AGENT_NAMES[1]].reasoning = "low";
-      args.baselineMatrix[AGENT_NAMES[1]].reasoning = "high";
-      args.selectedAgents.push(AGENT_NAMES[7]);
+      args.matrix[ROLE_NAMES[1]].reasoning = "low";
+      args.baselineMatrix[ROLE_NAMES[1]].reasoning = "high";
+      args.selectedAgents.push(ROLE_NAMES[7]);
       return { changed: true, scope: "project" };
     }
   });
@@ -183,11 +205,11 @@ test("Apply is called exactly once with isolated, validated transaction inputs",
   assert.equal(applyArgs.layout, layout);
   assert.equal(applyArgs.cwd, options.cwd);
   assert.equal(applyArgs.env, options.env);
-  assert.deepEqual(applyArgs.baselineMatrix[AGENT_NAMES[0]], baseline[AGENT_NAMES[0]]);
+  assert.deepEqual(applyArgs.baselineMatrix[ROLE_NAMES[0]], baseline[ROLE_NAMES[0]]);
   assert.notEqual(applyArgs.baselineMatrix, baseline);
   assert.notEqual(applyArgs.matrix, final);
-  assert.equal(final[AGENT_NAMES[1]].reasoning, "high");
-  assert.deepEqual(selectedAgents, [AGENT_NAMES[0], AGENT_NAMES[3]]);
+  assert.equal(final[ROLE_NAMES[1]].reasoning, "high");
+  assert.deepEqual(selectedAgents, [ROLE_NAMES[0], ROLE_NAMES[3]]);
   assert.equal(applyArgs.customPresetName, "Team Two");
   assert.deepEqual(applyArgs.catalog, catalog);
   assert.notEqual(applyArgs.catalog, catalog);
@@ -199,12 +221,12 @@ test("Apply is called exactly once with isolated, validated transaction inputs",
 
 test("invalid final matrix is rejected before Apply", async () => {
   const invalid = matrix();
-  invalid[AGENT_NAMES[0]] = { model: "missing", reasoning: "low" };
+  invalid[ROLE_NAMES[0]] = { model: "missing", reasoning: "low" };
   const { calls, deps } = harness({
     runSetupTuiFn: async () => ({
       outcome: "apply",
       matrix: invalid,
-      selectedAgents: [AGENT_NAMES[0]]
+      selectedAgents: [ROLE_NAMES[0]]
     })
   });
   await assert.rejects(runSetupCommand(options, deps), /unavailable model\/effort pair/);

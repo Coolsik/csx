@@ -1,7 +1,7 @@
 name = "csx-critic"
 description = "Read-only adversarial critic for missing criteria, unsafe sequencing, weak verification, and unnecessary complexity."
 model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
+model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 developer_instructions = """
 Identity

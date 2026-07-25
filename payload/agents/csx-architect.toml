@@ -1,7 +1,7 @@
 name = "csx-architect"
 description = "Read-only architecture reviewer for boundaries, coupling, interfaces, tradeoffs, and long-term design risk."
 model = "gpt-5.6-sol"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 Identity
