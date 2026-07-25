@@ -323,11 +323,12 @@ test("setup accepts the complete receipt produced by a real install", async () =
   try {
     await install({ scope: "project", projectRoot: root });
     const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
-    const matrix = presetMatrix("Low");
-    const result = await applySetup({ layout, matrix, catalog, customPresetName: "Low-derived", env: { HOME: root } });
+    const matrix = cloneMatrix(presetMatrix("Low"));
+    matrix["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
+    const result = await applySetup({ layout, matrix, catalog, customPresetName: "Team-derived", env: { HOME: root } });
     assert.equal(result.changed, true);
     assert.deepEqual(await readAgentMatrix(layout.agentsRoot), matrix);
-    assert.deepEqual((await readCustomPresets({ env: { HOME: root } })).presets["Low-derived"], matrix);
+    assert.deepEqual((await readCustomPresets({ env: { HOME: root } })).presets["Team-derived"], matrix);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -388,7 +389,8 @@ test("setup persists receipt drift without agent changes and no-ops when the rec
 test("real custom-only setup is followed immediately by an artifact-free no-op", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-setup-custom-only-"));
   try {
-    const matrix = presetMatrix("Low");
+    const matrix = cloneMatrix(presetMatrix("Low"));
+    matrix["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
     const { layout, paths, customPath } = await createSetupFixture(root, matrix, {
       receiptMatrix: matrix,
       customPresets: {}
@@ -532,6 +534,52 @@ test("setup rejects reserved custom preset names regardless of case", async () =
     await rm(root, { recursive: true, force: true });
   }
 });
+test("setup rejects built-in and custom matrix duplicates before creating a transaction", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-duplicate-matrix-"));
+  try {
+    const low = presetMatrix("Low");
+    const unique = cloneMatrix(low);
+    unique["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
+    const { layout, paths } = await createSetupFixture(root, low, {
+      receiptMatrix: low,
+      customPresets: { Team: unique }
+    });
+    let transactions = 0;
+    const transactionFactory = async () => {
+      transactions += 1;
+      assert.fail("duplicate matrices must fail before transaction creation");
+    };
+    await assert.rejects(
+      applySetup({
+        layout,
+        matrix: low,
+        baselineMatrix: low,
+        catalog,
+        customPresetName: "Low-copy",
+        env: { HOME: root },
+        expectedFilesLoader: async () => paths,
+        transactionFactory
+      }),
+      /matrix already exists as: Low/
+    );
+    await assert.rejects(
+      applySetup({
+        layout,
+        matrix: unique,
+        baselineMatrix: low,
+        catalog,
+        customPresetName: "Team-copy",
+        env: { HOME: root },
+        expectedFilesLoader: async () => paths,
+        transactionFactory
+      }),
+      /matrix already exists as: Team/
+    );
+    assert.equal(transactions, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("agent scanner rejects duplicate, table-decoy, and malformed escaped assignments", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-agent-scan-"));
   try {
@@ -579,7 +627,8 @@ test("setup rejects custom-preset drift after preview without writing either sco
   const home = await mkdtemp(join(tmpdir(), "csx-setup-preview-drift-"));
   try {
     const layout = setupLayout({ cwd: home, env: { HOME: home } }).global;
-    const matrix = presetMatrix("Low");
+    const matrix = cloneMatrix(presetMatrix("Low"));
+    matrix["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
     const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
     await mkdir(layout.agentsRoot, { recursive: true });
     await writeFile(layout.configPath, "# preserve this TOML\n");
