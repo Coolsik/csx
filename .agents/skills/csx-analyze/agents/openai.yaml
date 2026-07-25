@@ -1,5 +1,0 @@
-interface:
-  display_name: "csx-analyze"
-  short_description: "Analyze a repository with evidence"
-policy:
-  allow_implicit_invocation: false

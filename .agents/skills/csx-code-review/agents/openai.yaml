@@ -1,5 +1,0 @@
-interface:
-  display_name: "csx-code-review"
-  short_description: "Review repository changes with findings"
-policy:
-  allow_implicit_invocation: false

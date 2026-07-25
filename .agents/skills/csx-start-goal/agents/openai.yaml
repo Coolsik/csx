@@ -1,5 +1,0 @@
-interface:
-  display_name: "csx-start-goal"
-  short_description: "Execute a durable goal with evidence"
-policy:
-  allow_implicit_invocation: false
