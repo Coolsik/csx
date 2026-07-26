@@ -8,6 +8,17 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+const SKILL_HINTS = {
+  analyze: "read-only repository analysis with file-backed evidence and confidence labels",
+  spec: "evidence-grounded requirements clarification with readiness, scope, constraints, acceptance criteria, non-goals, and decision boundaries",
+  loop: "explicit bounded orchestration through specification, planning, goal execution, and completion",
+  plan: "concise implementation plan with verification and risk checks",
+  "plan-pro": "higher-rigor plan with bounded architect and critic review",
+  "start-goal": "durable task execution with success criteria and evidence",
+  deslop: "behavior-preserving cleanup of a bounded change followed by the same verification",
+  "code-review": "severity-first diff review with independent reviewer lanes for substantial changes",
+};
+
 const execFileAsync = promisify(execFile);
 const STATE_PATH = ".csx/workflow-state-v1.json";
 const STATE_LIMIT = 65_536;
@@ -62,6 +73,10 @@ const MANAGED_MARKERS = [
 await main().catch(() => {});
 
 async function main() {
+  if (process.argv[2] === "user-prompt-submit") {
+    await runUserPromptSubmitHook(process.stdin, process.stdout);
+    return;
+  }
   const authority = parseAuthority(process.argv.slice(2));
   if (authority === null || await inspectInstallation(authority.scope, authority.root, true) !== "valid") {
     return;
@@ -115,6 +130,53 @@ function parseAuthority(argv) {
     scope: argv[2],
     root: argv[4],
   };
+}
+
+async function runUserPromptSubmitHook(stdin, stdout) {
+  try {
+    const payload = parsePayload(await readAll(stdin));
+    if (!payload || payload.hook_event_name !== "UserPromptSubmit") return;
+    const skill = detectCsxSkill(payload.prompt);
+    if (!skill) return;
+    stdout.write(formatSkillContext(skill));
+  } catch {
+    // Prompt routing is advisory and must never block a user prompt.
+  }
+}
+
+function detectCsxSkill(prompt) {
+  if (typeof prompt !== "string") return null;
+
+  const match = prompt.match(
+    /^\s*(?:\$csx-(analyze|spec|loop|plan-pro|plan|start-goal|deslop|code-review)|csx\s+(analyze|spec|loop|plan-pro|plan|start-goal|deslop|code-review))\b/i,
+  );
+  if (!match) return null;
+
+  const skill = (match[1] || match[2]).toLowerCase();
+  if (skill === "loop") {
+    const invocation = prompt.match(/^\s*(?:\$csx-loop|csx\s+loop)\b([\s\S]*)$/i);
+    const request = invocation[1].trim();
+    if (!request) return null;
+    if (/^resume(?:\s|$)/i.test(request) && !/^resume\s+\S+$/i.test(request)) return null;
+  }
+
+  return Object.hasOwn(SKILL_HINTS, skill) ? skill : null;
+}
+
+function formatSkillContext(skill) {
+  const additionalContext = [
+    "<csx-routing>",
+    `Use the $csx-${skill} skill for this request: ${SKILL_HINTS[skill]}.`,
+    "Keep the workflow lightweight. Use bounded Codex subagent review only where that skill says it adds signal; otherwise stay in the main context.",
+    "Do not require a custom runner, background service, or MCP server for csx work.",
+    "</csx-routing>",
+  ].join("\n");
+  return `${JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext,
+    },
+  })}\n`;
 }
 
 async function inspectInstallation(scope, root, running = false) {

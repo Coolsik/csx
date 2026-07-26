@@ -59,7 +59,8 @@ still disable the feature.
 csx refuses to overwrite same-name files unless its installation receipt proves
 they are managed by csx. Existing config outside the marked csx block is
 preserved. Start a new Codex session after installation. Codex will ask you to
-review and trust the SessionStart and SubagentStop command hooks on first use.
+review and trust the UserPromptSubmit, SessionStart, and SubagentStop command
+hooks on first use.
 ## Setup
 
 ```bash
@@ -141,13 +142,16 @@ $csx-analyze explain this repository behavior
 $csx-spec clarify this feature idea
 $csx-plan create an implementation plan
 $csx-plan-pro plan this architecture-sensitive migration
+$csx-loop implement this bounded request end to end
 $csx-start-goal execute the accepted plan
 $csx-deslop clean this bounded change without changing behavior
 $csx-code-review review the current changes
 ```
 
-There is no UserPromptSubmit hook or prompt routing. Skills, including
-`csx-deslop`, run only through explicit `$csx-*` invocation.
+The UserPromptSubmit hook recognizes prompts beginning with `csx analyze`, `csx spec`,
+`csx plan`, `csx plan-pro`, `csx loop`, `csx start-goal`, `csx deslop`, or
+`csx code-review`. Ordinary natural-language prompts are not routed. Skills,
+including `csx-deslop`, use explicit invocation rather than implicit routing.
 
 Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
 architect, critic, executor, and code-reviewer.
@@ -173,6 +177,60 @@ replacement with the complete assignment. A tool or command known to still be
 running is not inactivity, and child skills monitor only their own direct
 subagents.
 
+### End-to-end loop
+
+Use `$csx-loop <request>` or `csx loop <request>` when one bounded request
+should continue through the fixed
+`csx-spec -> exactly one of csx-plan | csx-plan-pro -> csx-start-goal` flow.
+Planning is never skipped: a low-risk spec recommendation to start directly is
+mapped to `csx-plan`, while broad, high-risk, cross-module, or
+architecture-sensitive work uses `csx-plan-pro`. The normal plan must reach
+`READY`; the pro plan must have same-version Architect `CLEAR` and Critic
+`APPROVED` before execution can start.
+
+At a loop stage, only a first option explicitly labeled `Recommended` among
+2-3 choices may be selected automatically, and only when it is safe,
+reversible, and inside the accepted request and assumptions. A plan-changing
+choice without that recommendation stops as `BLOCKING_USER_DECISION`. The
+checkpoint reports a stable pending-decision identifier, the last completed
+stage, what the answer controls, that answering the exact decision continues
+the remaining workflow and implementation, and the exact resume command.
+
+Loop continuation authority is a current-turn, provenance-bound, single-use
+capability. The `initial-call`, `renewed-by-answer`, and `explicit-resume`
+values stored in spec, plan, or goal metadata are audit provenance, not
+credentials. Only the exact answer to the outstanding decision for the same
+slug and stage can renew answer authority; an unrelated answer, copied enum,
+old prompt, interruption, cancellation, or reported blocker cannot. Resume
+with an entire prompt of exactly one of these forms:
+
+```text
+$csx-loop resume <work-slug>
+csx loop resume <work-slug>
+```
+
+Resume validates the matching artifacts, accepted assumptions, repository
+freshness, attempt counters, and active goal, then continues at the first
+incomplete stage without regenerating valid completed stages. A resume command
+does not answer an unresolved `BLOCKING_USER_DECISION`; the exact pending
+answer is still required.
+
+`BLOCKED` child results, unavailable required roles, exhausted review or retry
+limits, a distinct active goal, stale or conflicting boundaries, and user
+cancellation are hard stops. Deployment, external messages, deletion,
+additional permissions, and irreversible effects always require separate
+approval and are never auto-selected. A loop reports final success only after
+the goal artifact has current evidence for every original acceptance criterion,
+final verification and cumulative review on one unchanged revision, a complete
+`Completion Decision`, and `update_goal complete`.
+
+The loop uses the existing `.csx/specs`, `.csx/plans`, and `.csx/goals`
+artifacts as checkpoints; it creates no `.csx/loops` state file, runner,
+daemon, or background service. Standalone `$csx-spec`, `$csx-plan`,
+`$csx-plan-pro`, and `$csx-start-goal` calls keep their existing explicit
+handoff and execution-selection rules when a complete current loop context and
+matching live authority are absent.
+
 `csx-plan` and `csx-plan-pro` produce versioned planning artifacts under
 `.csx/plans/`. A revised draft must be reviewed again, and `csx-plan-pro`
 requires Architect `CLEAR` plus Critic `APPROVED` for the same draft version.
@@ -197,12 +255,13 @@ expanding the goal.
 
 ## Lifecycle state and authority
 
-An installation adds two self-contained command hooks: SessionStart restores an
-eligible workflow, and SubagentStop records eligible local diagnostics. Each
-hook command carries its exact `project` or `global` scope and absolute
-installation root. The copied hook accepts that authority only when its running
-file and installation receipt prove exact receipt ownership. Missing, malformed,
-partially present, symlinked, or otherwise unsafe authority fails closed.
+An installation adds three self-contained command hooks: UserPromptSubmit routes
+explicit `csx ...` shorthand, SessionStart restores an eligible workflow, and
+SubagentStop records eligible local diagnostics. Each hook command carries its
+exact `project` or `global` scope and absolute installation root. Lifecycle
+operations accept that authority only when the running file and installation
+receipt prove exact receipt ownership. Missing, malformed, partially present,
+symlinked, or otherwise unsafe lifecycle authority fails closed.
 
 Only `csx-plan-pro` and `csx-start-goal` publish lifecycle state. Each linked
 worktree owns `.csx/workflow-state-v1.json` at its own top level; the common Git

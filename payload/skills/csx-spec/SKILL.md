@@ -48,6 +48,37 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 - Keep discovery separate from implementation. Do not edit product files or start an execution workflow from this skill.
 - Write artifacts only for multi-turn clarification or when the user explicitly requests a file.
 
+## csx-loop Composition Contract
+
+Loop-aware behavior is a bounded return path to an invoking `$csx-loop`, not another way to invoke this skill. Validate the incoming context against the exact `$csx-loop` schema, with no alternate fields or token:
+
+```text
+source
+original_invocation
+original_request
+work_slug
+spec_path
+spec_status
+spec_recommendation
+plan_kind
+plan_path
+plan_status
+accepted_reversible_assumptions
+last_completed_stage
+remaining_stages
+continuation_authority
+repository_marker
+affected_evidence
+pending_decision
+attempt_counters
+```
+
+Require `source: csx-loop`, a complete internally consistent context, and current live authority bound to this `work_slug`, the current stage, the `csx-spec` entry transition, the exact `pending_decision` or `none`, and the current user turn with `consumed: false`. The stored `continuation_authority: initial-call | renewed-by-answer | explicit-resume` is audit provenance only. A persisted enum, copied metadata, edited artifact, earlier prompt, stale answer, or unrelated answer is not live authority.
+
+Validate every binding immediately before entry and consume the live authority exactly once. A successful return permits only the parent loop, while the same current-turn orchestration remains uninterrupted, to derive authority for the one next transition. A question, blocker, cancellation, unrelated turn, or ended workflow invalidates authority; the child must not derive, renew, or pass authority directly to another child.
+
+This branch never approves deployment, an external message, deletion, additional permission, or an irreversible side effect. Those actions always require their own approval. Missing or invalid loop context or live authority preserves the standalone workflow below, including its explicit handoff questions and authorization rules.
+
 ## Proportionality and Support Boundaries
 
 - Specify the smallest supported domain that satisfies the user's outcome. Do not translate vague quality words such as robust, compatible, safe, or responsive into unbounded inputs, every platform, extreme environments, or a new threat model.
@@ -163,6 +194,14 @@ Reject an internally inconsistent verdict and ask the Analyst to correct its del
 - Persist the accepted Analyst specification body without independently rewriting its requirements. The root may append workflow provenance and handoff metadata.
 
 ### 8. Hand Off Explicitly
+
+For a fully validated loop context with current live authority consumed for this spec transition, use the loop return instead of this standalone handoff:
+
+- Write the immutable final Analyst specification only for `READY` or `READY_WITH_ASSUMPTIONS`, appending permitted loop provenance outside that body.
+- Return only `spec_path`, `spec_status`, `spec_recommendation`, `accepted_reversible_assumptions`, `repository_marker`, and the complete loop provenance to the parent `$csx-loop`. Do not ask either final handoff question and do not invoke a downstream workflow.
+- For `BLOCKED`, return only the blocker and last valid checkpoint to the parent. Do not invoke planning or execution.
+
+The parent validates this return before it derives the next transition. Invalid or missing loop context uses the standalone behavior that follows.
 
 After writing a final spec, honor an already explicit downstream request before asking again. A request for an implementation plan, reviewed plan, architecture plan, or execution counts even when it does not use a literal `$csx-*` name. Map an explicitly requested planning deliverable through the recommendation rules below and invoke that workflow with the final spec. If the request explicitly authorizes execution from this final spec, it may satisfy the `$csx-start-goal` selection only under that skill's entry gate. Do not turn a generic request to "implement" into execution authority.
 

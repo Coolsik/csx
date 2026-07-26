@@ -18,6 +18,7 @@ const skillNames = [
   "csx-analyze",
   "csx-code-review",
   "csx-deslop",
+  "csx-loop",
   "csx-plan",
   "csx-plan-pro",
   "csx-spec",
@@ -128,6 +129,232 @@ test("every skill applies the common activity-aware subagent liveness policy", a
     assert.match(skill, /Use the environment's existing agent controls/);
     assert.match(skill, /Do not implement a custom runner, background service, or hard-kill timer/);
   }
+});
+
+test("csx-loop is a closed-list skill with explicit-only metadata", async () => {
+  const metadata = await readFile(
+    resolve(root, "payload/skills/csx-loop/agents/openai.yaml"),
+    "utf8",
+  );
+
+  assert.deepEqual(skillNames.filter((name) => name === "csx-loop"), ["csx-loop"]);
+  assert.match(metadata, /allow_implicit_invocation: false/);
+});
+
+test("loop composition consumes the exact bounded context and live authority contract", async () => {
+  const childNames = ["csx-spec", "csx-plan", "csx-plan-pro", "csx-start-goal"];
+  const contextFields = [
+    "source",
+    "original_invocation",
+    "original_request",
+    "work_slug",
+    "spec_path",
+    "spec_status",
+    "spec_recommendation",
+    "plan_kind",
+    "plan_path",
+    "plan_status",
+    "accepted_reversible_assumptions",
+    "last_completed_stage",
+    "remaining_stages",
+    "continuation_authority",
+    "repository_marker",
+    "affected_evidence",
+    "pending_decision",
+    "attempt_counters",
+  ];
+
+  for (const name of childNames) {
+    const skill = await readSkill(name);
+    assert.match(skill, /^## csx-loop (?:Composition|Entry) Contract$/m);
+    for (const field of contextFields) {
+      assert.match(skill, new RegExp(`^${field}$`, "m"), `${name} must consume ${field}`);
+    }
+    assert.match(skill, /current user turn with `consumed: false`/);
+    assert.match(skill, /persisted enum|stored `continuation_authority/);
+    assert.match(skill, /unrelated answer/);
+    assert.match(skill, /question, blocker, cancellation, unrelated turn/);
+    assert.match(skill, /deployment, an external message, deletion, additional permission/i);
+  }
+
+  const loop = await readSkill("csx-loop");
+  assert.match(loop, /Bind each live authority instance to:[\s\S]*current_user_turn[\s\S]*consumed: false/);
+  assert.match(loop, /consume that authority exactly once/);
+  assert.match(loop, /derive authority for the single next transition/);
+  assert.match(loop, /Never derive across a user question, stop, cancellation, unrelated turn, reported blocker/);
+});
+
+test("csx-loop fixes stage order, one plan branch, resume, and hard stops", async () => {
+  const loop = await readSkill("csx-loop");
+
+  assert.match(loop, /csx-spec -> exactly one of csx-plan \| csx-plan-pro -> csx-start-goal/);
+  assert.match(loop, /Planning is never skipped/);
+  assert.match(loop, /\| `csx-start-goal` \| `\$csx-plan` \|/);
+  assert.match(loop, /Never call both planning skills and never create both plan artifacts/);
+  assert.match(loop, /Accept `\$csx-plan` only with `Decision: READY`/);
+  assert.match(loop, /Accept `\$csx-plan-pro` only with `Decision: APPROVED`/);
+  assert.match(loop, /same-version Architect `CLEAR` and Critic `APPROVED`/);
+  assert.match(loop, /stored `continuation_authority` value is audit provenance only/);
+  assert.match(loop, /current input is the answer to the exact outstanding question/);
+  assert.match(loop, /nearby, stale, or unrelated answer does not qualify/);
+  assert.match(loop, /entire current prompt is exactly `\$csx-loop resume <work-slug>` or `csx loop resume <work-slug>`/);
+  assert.match(loop, /The resume command does not answer the unresolved decision/);
+  assert.match(loop, /BLOCKING_USER_DECISION/);
+  assert.match(loop, /Answering this exact pending decision continues the remaining workflow and implementation/);
+  assert.match(loop, /any child `BLOCKED` result/);
+  assert.match(loop, /required CSX role is missing/);
+  assert.match(loop, /review, revision, retry, verification, or repair limit is exhausted/);
+  assert.match(loop, /distinct active aggregate goal/);
+  assert.match(loop, /permission or safety gate/);
+  assert.match(loop, /never auto-select or auto-loop `Refine further`/i);
+});
+
+test("spec-stage blockers use draft-only checkpoints and resume fail closed", async () => {
+  const [loop, spec] = await Promise.all([
+    readSkill("csx-loop"),
+    readSkill("csx-spec"),
+  ]);
+  const checkpoint = loop.match(
+    /^## Checkpoint and Resume$[\s\S]*?(?=^## Progress and Completion$)/m,
+  )?.[0];
+
+  assert.ok(checkpoint, "csx-loop must define a bounded checkpoint consumer");
+
+  // Bind the existing csx-spec producer to the exact path consumed by csx-loop.
+  const draftPath = /\.csx\/specs\/<work-slug>\.draft\.md/;
+  assert.match(spec, /\.csx\/specs\/<slug>\.draft\.md/);
+  assert.match(spec, /For a `BLOCKED` draft[\s\S]*`Status: BLOCKED`/);
+  assert.match(spec, /Write `\.csx\/specs\/<slug>\.md` only for `READY` or `READY_WITH_ASSUMPTIONS`/);
+  assert.match(spec, /The root may append workflow provenance and handoff metadata/);
+  assert.match(checkpoint, draftPath);
+  assert.match(checkpoint, /`\$csx-spec` is the producer/);
+  assert.match(checkpoint, /only while the `csx-spec` stage is incomplete/);
+
+  // A draft preserves the exact context needed to reject mismatched recovery.
+  for (const field of [
+    "source: csx-loop",
+    "work_slug",
+    "original_invocation",
+    "original_request",
+    "last_completed_stage",
+    "remaining_stages",
+    "pending_decision",
+    "attempt_counters",
+    "continuation_authority",
+    "repository_marker",
+    "affected_evidence",
+  ]) {
+    const fieldPattern = new RegExp(field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    assert.match(checkpoint, fieldPattern);
+    assert.match(spec, fieldPattern, `csx-spec producer must receive ${field}`);
+  }
+  assert.match(checkpoint, /`last_completed_stage` that does not claim `csx-spec` completion/);
+  assert.match(checkpoint, /`remaining_stages` whose first item is `csx-spec`/);
+  assert.match(checkpoint, /stable `pending_decision` whose embedded `work_slug` matches and whose `stage` is `csx-spec`/);
+  assert.match(checkpoint, /exact outstanding question and controlled downstream decision/);
+  assert.match(checkpoint, /Missing, stale, or conflicting draft context is not a checkpoint and creates no authority/);
+  assert.match(checkpoint, /Only after the persisted checkpoint fields pass may live authority bind its `current_stage` to `csx-spec`/);
+  assert.match(checkpoint, /do not persist `current_stage` as an alternate loop-context field/);
+  assert.doesNotMatch(checkpoint, /`current_stage: csx-spec`/);
+
+  // Exact answer/resume re-enters spec; only a new final result unlocks fixed order.
+  assert.match(checkpoint, /exact pending-decision answer[\s\S]*validate `renewed-by-answer`[\s\S]*incomplete `\$csx-spec` stage/);
+  assert.match(checkpoint, /exact `\$csx-loop resume <work-slug>` or `csx loop resume <work-slug>`[\s\S]*validate `explicit-resume`[\s\S]*re-enter the incomplete `\$csx-spec` stage/);
+  assert.match(checkpoint, /Resume does not answer an unresolved question[\s\S]*same stable blocker until its exact answer arrives/);
+  assert.match(checkpoint, /No initial call, unrelated answer, or stale, mismatched, or nearby answer or resume may reuse or alter the draft or create authority/);
+  assert.match(checkpoint, /Only after resumed `\$csx-spec` returns `READY` or `READY_WITH_ASSUMPTIONS`[\s\S]*writes `\.csx\/specs\/<work-slug>\.md`[\s\S]*continue through exactly one planning stage and `\$csx-start-goal` in the fixed order/);
+  assert.match(checkpoint, /Do not rerun any already completed final stage/);
+
+  // Negative boundary: draft is neither READY nor a replacement final artifact.
+  assert.match(checkpoint, /Never treat a draft as a final spec, `READY`, `READY_WITH_ASSUMPTIONS`, or authority to select a plan or enter `\$csx-start-goal`/);
+  assert.match(checkpoint, /The draft never replaces `\.csx\/specs\/<work-slug>\.md`/);
+  assert.match(checkpoint, /final artifacts remain the only completed-stage checkpoints/);
+  assert.match(checkpoint, /Do not create `\.csx\/loops` or any other loop state artifact/);
+});
+
+test("loop-aware spec and plans return to their parent without weakening standalone handoffs", async () => {
+  const [spec, plan, planPro] = await Promise.all([
+    readSkill("csx-spec"),
+    readSkill("csx-plan"),
+    readSkill("csx-plan-pro"),
+  ]);
+
+  assert.match(spec, /Return only `spec_path`, `spec_status`, `spec_recommendation`/);
+  assert.match(spec, /Do not ask either final handoff question and do not invoke a downstream workflow/);
+  assert.match(spec, /For `BLOCKED`, return only the blocker and last valid checkpoint/);
+  assert.match(spec, /Invalid or missing loop context uses the standalone behavior/);
+
+  assert.match(plan, /only when the final artifact has `Decision: READY`/);
+  assert.match(plan, /Return `plan_path`, `plan_kind: csx-plan`, `plan_status: READY`/);
+  assert.match(plan, /do not call `request_user_input` and do not invoke `\$csx-start-goal`/);
+  assert.match(plan, /immutable Planner Body and the maximum of 5 review cycles remain unchanged/);
+  assert.match(plan, /If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged/);
+
+  assert.match(planPro, /Architect `CLEAR` and Critic `APPROVED` for the same accepted `draft_version`/);
+  assert.match(planPro, /Return `plan_path`, `plan_kind: csx-plan-pro`, `plan_status: APPROVED`/);
+  assert.match(planPro, /Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`/);
+  assert.match(planPro, /review exhaustion cannot pass this gate/);
+  assert.match(planPro, /Never auto-select or auto-loop `Refine further`/);
+  assert.match(planPro, /immutable Planner Body and every existing review, revision, and maximum of 5 review cycles remain unchanged/);
+  assert.match(planPro, /If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged/);
+
+  assert.match(spec, /use two sequential `request_user_input` calls/);
+  assert.match(plan, /After writing the artifact, call `request_user_input`/);
+  assert.match(planPro, /After writing the artifact, call `request_user_input`/);
+});
+
+test("start-goal loop entry fails closed and retains the aggregate completion gate", async () => {
+  const skill = await readSkill("csx-start-goal");
+
+  assert.match(skill, /through exactly one of these parallel branches/);
+  assert.match(skill, /matching final spec with `spec_status: READY \| READY_WITH_ASSUMPTIONS`/);
+  assert.match(skill, /exactly one matching plan artifact/);
+  assert.match(skill, /`plan_kind: csx-plan` with `plan_status: READY`/);
+  assert.match(skill, /`plan_kind: csx-plan-pro` with `plan_status: APPROVED`/);
+  assert.match(skill, /matching path, slug, original boundary, accepted `draft_version`, and artifact status/);
+  assert.match(skill, /bounded revalidation of only the `affected_evidence`/);
+  assert.match(skill, /a distinct active goal is a hard stop/);
+  assert.match(skill, /Consume the entry authority exactly once only after every check/);
+  assert.match(skill, /BLOCKED: invalid loop approval context/);
+  assert.match(skill, /Never fall back from a malformed loop claim to standalone authorization/);
+  assert.match(skill, /When there is no loop claim, preserve the standalone Entry Gate unchanged/);
+  assert.match(skill, /record the validated loop provenance and accepted boundaries under `Objective and Accepted Boundaries`/);
+  assert.match(skill, /checkpoint provenance only and does not remain or become live authority/);
+  assert.match(skill, /For a csx plan, accept only `Decision: READY`/);
+  assert.match(skill, /explicit `Start execution with \$csx-start-goal` selection/);
+  assert.match(skill, /every original criterion have current direct evidence/);
+  assert.match(skill, /latest cumulative verification succeeds at the unchanged revision/);
+  assert.match(skill, /final code review returns `APPROVE`/);
+  assert.match(skill, /call `update_goal` with `complete` exactly once/);
+});
+
+test("loop contract adds no loop state file or runtime engine", async () => {
+  const loop = await readSkill("csx-loop");
+
+  assert.match(loop, /Do not create `\.csx\/loops`/);
+  assert.match(loop, /not a runner, daemon, background service, MCP server, or new state system/);
+});
+
+test("README documents direct, resumable, fail-closed loop use", async () => {
+  const readme = await readFile(resolve(root, "README.md"), "utf8");
+  const compact = readme.replace(/\s+/g, " ");
+
+  assert.match(compact, /\$csx-loop implement this bounded request end to end/);
+  assert.match(compact, /`csx plan-pro`, `csx loop`, `csx start-goal`/);
+  assert.match(compact, /\$csx-loop <request>` or `csx loop <request>/);
+  assert.match(compact, /csx-spec -> exactly one of csx-plan \| csx-plan-pro -> csx-start-goal/);
+  assert.match(compact, /low-risk spec recommendation to start directly is mapped to `csx-plan`/);
+  assert.match(compact, /same-version Architect `CLEAR` and Critic `APPROVED`/);
+  assert.match(compact, /first option explicitly labeled `Recommended` among 2-3 choices/);
+  assert.match(compact, /BLOCKING_USER_DECISION/);
+  assert.match(compact, /\$csx-loop resume <work-slug>/);
+  assert.match(compact, /csx loop resume <work-slug>/);
+  assert.match(compact, /current-turn, provenance-bound, single-use capability/);
+  assert.match(compact, /stored in spec, plan, or goal metadata are audit provenance, not credentials/);
+  assert.match(compact, /Deployment, external messages, deletion, additional permissions, and irreversible effects always require separate approval/);
+  assert.match(compact, /`Completion Decision`, and `update_goal complete`/);
+  assert.match(compact, /creates no `\.csx\/loops` state file, runner, daemon, or background service/);
+  assert.match(compact, /Standalone `\$csx-spec`, `\$csx-plan`,.*keep their existing explicit/);
 });
 
 test("csx-analyze delegates investigation and final synthesis to Explorer", async () => {

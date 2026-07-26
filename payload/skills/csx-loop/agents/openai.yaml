@@ -1,0 +1,5 @@
+interface:
+  display_name: "csx-loop"
+  short_description: "Orchestrate one bounded CSX workflow"
+policy:
+  allow_implicit_invocation: false

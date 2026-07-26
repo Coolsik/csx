@@ -63,13 +63,56 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 
 ## Entry Gate
 
-1. Confirm current-turn execution authority.
-   - For a csx spec, reject `BLOCKED`; accept `READY_WITH_ASSUMPTIONS` only when the user explicitly selected execution and thereby accepted its listed reversible assumptions.
-   - For a csx plan, accept only `Decision: READY`.
-   - For a csx pro plan, accept only `Decision: APPROVED`.
-   - Reject every `BLOCKED` plan and every plan handed over without the user's explicit `Start execution with $csx-start-goal` selection or an equivalent current-turn request that names `$csx-start-goal` and the accepted plan.
+1. Confirm current-turn execution authority through exactly one of these parallel branches.
+   - Standalone branch:
+     - For a csx spec, reject `BLOCKED`; accept `READY_WITH_ASSUMPTIONS` only when the user explicitly selected execution and thereby accepted its listed reversible assumptions.
+     - For a csx plan, accept only `Decision: READY`.
+     - For a csx pro plan, accept only `Decision: APPROVED`.
+     - Reject every `BLOCKED` plan and every plan handed over without the user's explicit `Start execution with $csx-start-goal` selection or an equivalent current-turn request that names `$csx-start-goal` and the accepted plan.
+   - `$csx-loop` authority branch: apply every validation in `csx-loop Entry Contract` below. A successful validation is the current-turn execution selection equivalent for this entry only.
 2. Preserve the accepted input as binding execution context. Preserve its scope, non-goals, constraints, acceptance criteria, decisions, assumptions, Verification Matrix, risks, and stop conditions.
 3. Call `get_goal` before creating anything. Use exactly one aggregate Codex goal for the entire accepted plan. Resume the same goal and artifact when active, stop for a different active goal, and otherwise call `create_goal` once. Persist the created or resumed control artifact before beginning canonical workflow state.
+
+## csx-loop Entry Contract
+
+Validate a claimed loop entry against the exact `$csx-loop` context schema, with no alternate fields or token:
+
+```text
+source
+original_invocation
+original_request
+work_slug
+spec_path
+spec_status
+spec_recommendation
+plan_kind
+plan_path
+plan_status
+accepted_reversible_assumptions
+last_completed_stage
+remaining_stages
+continuation_authority
+repository_marker
+affected_evidence
+pending_decision
+attempt_counters
+```
+
+The loop branch requires all of the following before implementation or goal creation:
+
+- `source: csx-loop`, one bounded original request and matching `work_slug`, complete original invocation provenance, preserved counters, and internally consistent completed/remaining stages;
+- a matching final spec with `spec_status: READY | READY_WITH_ASSUMPTIONS`, its accepted reversible assumptions explicitly present in `accepted_reversible_assumptions`, and no unaccepted assumption;
+- exactly one matching plan artifact: `plan_kind: csx-plan` with `plan_status: READY` or `plan_kind: csx-plan-pro` with `plan_status: APPROVED`, plus matching path, slug, original boundary, accepted `draft_version`, and artifact status;
+- for a pro plan, Architect `CLEAR` and Critic `APPROVED` for that same accepted `draft_version`;
+- a current repository marker, or bounded revalidation of only the `affected_evidence` whose boundary the marker change can invalidate;
+- `get_goal` reporting no active goal or the same compatible aggregate goal and matching goal artifact; a distinct active goal is a hard stop; and
+- current live authority bound to this `work_slug`, current stage, the `csx-start-goal` entry transition, exact `pending_decision` or `none`, and current user turn with `consumed: false`.
+
+The stored `continuation_authority: initial-call | renewed-by-answer | explicit-resume` is audit provenance only. A persisted enum, past prompt, copied or edited artifact, stale answer, unrelated answer, or mismatched resume command cannot satisfy entry. Validate the current-turn source and every binding immediately before entry. Consume the entry authority exactly once only after every check, including active-goal compatibility, succeeds; it cannot authorize a repeated entry.
+
+If `source: csx-loop` or any other loop claim is present but the complete context, accepted artifacts, repository freshness, active-goal compatibility, or live authority fails validation, stop before `create_goal` with exactly `BLOCKED: invalid loop approval context`. Never fall back from a malformed loop claim to standalone authorization. When there is no loop claim, preserve the standalone Entry Gate unchanged.
+
+A question, blocker, cancellation, unrelated turn, permission stop, or ended workflow invalidates live authority. This skill cannot renew or derive it. Deployment, an external message, deletion, additional permission, and irreversible effects always require separate approval regardless of a Recommended label or loop provenance.
 
 ## Proportionality and Scope Control
 
@@ -86,6 +129,8 @@ Use the smallest evidence set that directly proves each criterion and relevant f
 ## Goal Artifact
 
 Create or resume `.csx/goals/<slug>.md` as the current execution source of truth. Keep it compact:
+
+After a successful loop-authority entry, record the validated loop provenance and accepted boundaries under `Objective and Accepted Boundaries`. This is checkpoint provenance only and does not remain or become live authority.
 
 ```markdown
 # Goal: <title>

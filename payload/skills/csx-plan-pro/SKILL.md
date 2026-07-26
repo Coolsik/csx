@@ -94,6 +94,37 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 10. Before finalization, require the final Critic result to confirm that the consensus draft matches the original request, input spec, and user decisions. If it reports a conflicting assumption or open decision that can change implementation, reconcile it with the user and start a new versioned review cycle.
 11. Write `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`. Place the exact Planner body reviewed in the consensus cycle inside the artifact envelope without modification. Append the exact Architect and Critic results, Review Ledger, and handoff as provenance outside that immutable body. Persist each artifact milestone before its canonical workflow checkpoint, and persist the terminal artifact before `finish`.
 
+## csx-loop Composition Contract
+
+Loop-aware behavior is a bounded return path to an invoking `$csx-loop`, not another planning mode. Validate the incoming context against the exact `$csx-loop` schema, with no alternate fields or token:
+
+```text
+source
+original_invocation
+original_request
+work_slug
+spec_path
+spec_status
+spec_recommendation
+plan_kind
+plan_path
+plan_status
+accepted_reversible_assumptions
+last_completed_stage
+remaining_stages
+continuation_authority
+repository_marker
+affected_evidence
+pending_decision
+attempt_counters
+```
+
+Require `source: csx-loop`, `plan_kind: csx-plan-pro`, a matching accepted spec and `work_slug`, and a complete internally consistent context. Require current live authority bound to this `work_slug`, current stage, the `csx-plan-pro` transition, exact `pending_decision` or `none`, and current user turn with `consumed: false`. The stored `continuation_authority: initial-call | renewed-by-answer | explicit-resume` is audit provenance only; a persisted enum, copied metadata, earlier prompt, stale answer, or unrelated answer is not live authority.
+
+Validate every binding immediately before entry and consume the authority exactly once. Only the parent loop may derive authority for the one next transition from the same current-turn source after a successful child return. A question, blocker, cancellation, unrelated turn, or ended workflow invalidates it. This child must not derive or forward live authority.
+
+This branch never approves deployment, an external message, deletion, additional permission, or an irreversible side effect. Those actions always require their own approval. Missing or invalid loop context or live authority preserves the standalone explicit-selection workflow.
+
 ## Material Change Rule
 
 Any post-review change to scope, boundaries, approach, sequence, acceptance criteria, verification, risks, decisions, assumptions, or stop conditions invalidates both verdicts and starts the next cycle. Editorial formatting that does not change meaning may be appended outside the approved plan body.
@@ -222,6 +253,10 @@ draft_version: <N or N/A>
 ```
 
 ## Final Handoff
+
+For a validated loop context whose selected kind is `csx-plan-pro`, whose accepted spec and slug match, and whose current plan-transition authority was consumed, replace the standalone handoff only for `Decision: APPROVED` backed by Architect `CLEAR` and Critic `APPROVED` for the same accepted `draft_version`. Return `plan_path`, `plan_kind: csx-plan-pro`, `plan_status: APPROVED`, the accepted `draft_version`, accepted reversible assumptions, repository marker, and complete loop provenance to the parent `$csx-loop`; do not call `request_user_input` and do not invoke `$csx-start-goal`. The immutable Planner Body and every existing review, revision, and maximum of 5 review cycles remain unchanged.
+
+Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`, an unresolvable blocker, a required-role failure, and review exhaustion cannot pass this gate. After the existing bounded review routing finishes without same-version consensus, return `BLOCKED`, the blocker, and last valid checkpoint to the parent and invalidate authority. Never auto-select or auto-loop `Refine further`. The parent alone may validate the return and derive the start-goal transition. If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged.
 
 After writing the artifact, call `request_user_input` from the root thread.
 

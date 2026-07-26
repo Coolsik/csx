@@ -48,6 +48,37 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 - If a raw request lacks acceptance criteria, non-goals, or decision boundaries that can change implementation, invoke `$csx-spec` from the root and stop this planning pass. Continue only from its final spec when the user has explicitly selected the `$csx-plan` handoff. Do not fill the gap with root-authored requirements.
 - If the request is already decision-ready, or the user supplied an existing plan for review, continue with the workflow below. Give an existing plan to the Planner as input rather than treating it as an independently approved draft.
 
+## csx-loop Composition Contract
+
+Loop-aware behavior is a bounded return path to an invoking `$csx-loop`, not another planning mode. Validate the incoming context against the exact `$csx-loop` schema, with no alternate fields or token:
+
+```text
+source
+original_invocation
+original_request
+work_slug
+spec_path
+spec_status
+spec_recommendation
+plan_kind
+plan_path
+plan_status
+accepted_reversible_assumptions
+last_completed_stage
+remaining_stages
+continuation_authority
+repository_marker
+affected_evidence
+pending_decision
+attempt_counters
+```
+
+Require `source: csx-loop`, `plan_kind: csx-plan`, a matching accepted spec and `work_slug`, and a complete internally consistent context. Require current live authority bound to this `work_slug`, current stage, the `csx-plan` transition, exact `pending_decision` or `none`, and current user turn with `consumed: false`. The stored `continuation_authority: initial-call | renewed-by-answer | explicit-resume` is audit provenance only; a persisted enum, copied metadata, earlier prompt, stale answer, or unrelated answer is not live authority.
+
+Validate every binding immediately before entry and consume the authority exactly once. Only the parent loop may derive authority for the one next transition from the same current-turn source after a successful child return. A question, blocker, cancellation, unrelated turn, or ended workflow invalidates it. This child must not derive or forward live authority.
+
+This branch never approves deployment, an external message, deletion, additional permission, or an irreversible side effect. Those actions always require their own approval. Missing or invalid loop context or live authority preserves the standalone explicit-selection workflow.
+
 ## Workflow
 
 1. Read the spec and user request.
@@ -156,6 +187,10 @@ Approved draft_version: <N or N/A>
 Keep plans short. Prefer 5-9 concrete steps over exhaustive task trees.
 
 ## Final Handoff
+
+For a validated loop context whose selected kind is `csx-plan`, whose accepted spec and slug match, and whose current plan-transition authority was consumed, replace the standalone handoff only when the final artifact has `Decision: READY`. Return `plan_path`, `plan_kind: csx-plan`, `plan_status: READY`, the accepted `draft_version`, accepted reversible assumptions, repository marker, and complete loop provenance to the parent `$csx-loop`; do not call `request_user_input` and do not invoke `$csx-start-goal`. The immutable Planner Body and the maximum of 5 review cycles remain unchanged.
+
+For `Decision: BLOCKED`, a required-role failure, or review exhaustion, return `BLOCKED`, the blocker, and last valid checkpoint to the parent and invalidate authority. Never auto-select `Refine further`. The parent alone may validate the return and derive the start-goal transition. If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged.
 
 After writing the artifact, call `request_user_input` from the root thread.
 
