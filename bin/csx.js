@@ -2,9 +2,15 @@
 
 import { parseArgs } from "node:util";
 import { install, uninstall } from "../lib/install.js";
+import { readLocalDiagnostics } from "../lib/local-diagnostics.js";
 import { runSetupCommand } from "../lib/setup-command.js";
 import { escapeTerminalText } from "../lib/terminal-text.js";
 import { TransactionLockError } from "../lib/transaction-lock.js";
+import {
+  readBoundedJson,
+  runWorkflowOperation,
+  workflowErrorResult
+} from "../lib/workflow-state.js";
 
 class UsageError extends Error {}
 
@@ -12,6 +18,8 @@ const USAGE = `Usage:
   csx install [--scope global|project] [--project-root <path>]
   csx uninstall [--project-root <path>]
   csx setup
+  csx workflow begin|checkpoint|finish < request.json
+  csx diagnostics [--json]
   csx --help
 
 Install scopes:
@@ -56,7 +64,7 @@ try {
       process.stdout.write(`Installed csx ${escapeTerminalText(result.version)} (${escapeTerminalText(result.scope)}) in ${escapeTerminalText(result.root)}\n`);
       process.stdout.write("Enabled Codex Default mode user-input choices for this install scope.\n");
       process.stdout.write("Start a new Codex session to load the installed skills and agents.\n");
-      process.stdout.write("On first hook use, review and trust the csx hook when Codex prompts you.\n");
+      process.stdout.write("On first use, review and trust the csx SessionStart and SubagentStop command hooks when Codex prompts you.\n");
     }
   } else if (command === "setup") {
     if (args.length) throw new UsageError("setup does not accept arguments.");
@@ -64,6 +72,50 @@ try {
       throw new UsageError("setup requires an interactive terminal; use Codex configuration directly in automation.");
     }
     await runSetupCommand();
+  } else if (command === "workflow") {
+    const operation = args[0];
+    let result;
+    if (args.length !== 1) {
+      result = workflowErrorResult(operation, { code: "invalid_operation" });
+    } else {
+      try {
+        const request = await readBoundedJson(process.stdin);
+        result = await runWorkflowOperation(operation, request, { cwd: process.cwd() });
+      } catch (error) {
+        result = workflowErrorResult(operation, error);
+      }
+    }
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } else if (command === "diagnostics") {
+    if (args.length > 1 || (args.length === 1 && args[0] !== "--json")) {
+      throw new UsageError("diagnostics accepts only --json.");
+    }
+    const { values } = parseArgs({
+      args,
+      options: {
+        json: { type: "boolean" }
+      },
+      strict: true
+    });
+    const result = await readLocalDiagnostics({ cwd: process.cwd() });
+    if (values.json) {
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } else if (result.events.length === 0) {
+      process.stdout.write("No csx diagnostics found.\n");
+    } else {
+      for (const event of result.events) {
+        const fields = [
+          event.timestamp,
+          event.workflow,
+          event.phase,
+          event.role,
+          event.status,
+          event.reason_code,
+          event.failure_detail
+        ].filter((value) => value !== undefined).map(escapeTerminalText);
+        process.stdout.write(`${fields.join(" | ")}\n`);
+      }
+    }
   } else if (command === "uninstall") {
     const { values } = parseArgs({
       args,

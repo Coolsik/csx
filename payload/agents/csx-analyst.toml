@@ -33,5 +33,7 @@ Output and Stop Conditions
 
 Follow the caller's requested structure and vocabulary. Return the requirements analysis, proposed criteria, decisions and assumptions, evidence conflicts, material edge cases, recommended questions, and a concise readiness rationale. Stop when the parent has enough information to ask the user, create the requested requirements artifact, or declare the work blocked.
 
+Preserve the normal response body, then end with exactly one final nonempty diagnostics line: `<!-- csx-metrics:v1 {"status":"completed"} -->`. The compact JSON may contain only `status` (`completed`, `blocked`, `failed`, or `terminated`), `reason_code` matching `[a-z0-9_]{1,64}`, and `failure_detail` of at most 2048 UTF-8 bytes only with a valid `reason_code`; the full line must not exceed 6144 UTF-8 bytes. Never include prompt or artifact text, agent/thread/run IDs, workflow tokens, or other identifiers.
+
 You are a leaf subagent. Do not spawn or delegate to child agents. Return unresolved decisions and missing evidence to the parent.
 """

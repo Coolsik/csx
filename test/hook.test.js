@@ -7,41 +7,40 @@ import test from "node:test";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const hook = resolve(root, "payload", "hooks", "csx-hook.mjs");
 
-test("hook routes direct and shorthand csx skill prompts", async () => {
-  for (const prompt of [
-    "$csx-plan-pro migrate safely",
-    "csx spec define this",
-    "$csx-deslop clean the bounded diff",
-    "csx deslop clean the bounded diff",
-  ]) {
-    const output = await runHook({ hook_event_name: "UserPromptSubmit", prompt });
-    const parsed = JSON.parse(output);
-    assert.match(parsed.hookSpecificOutput.additionalContext, /\$csx-(plan-pro|spec|deslop) skill/);
-  }
+test("hook has no prompt routing dispatcher", async () => {
+  const result = await runHook("user-prompt-submit", {
+    hook_event_name: "UserPromptSubmit",
+    prompt: "$csx-plan-pro migrate safely",
+  });
+  assert.deepEqual(result, { code: 0, stdout: "" });
 });
 
-test("hook ignores ordinary, unknown, and invalid prompts", async () => {
-  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "please plan this" }), "");
-  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "csx unknown" }), "");
-  assert.equal(await runRaw("{not json"), "");
+test("SubagentStop is a successful empty lifecycle hook", async () => {
+  assert.deepEqual(
+    await runHook("subagent-stop", { hook_event_name: "SubagentStop" }),
+    { code: 0, stdout: "" },
+  );
+  assert.deepEqual(await runRaw("subagent-stop", "{not json"), { code: 0, stdout: "" });
 });
 
-function runHook(payload) {
-  return runRaw(JSON.stringify(payload));
+test("unsupported lifecycle argv and malformed input fail open", async () => {
+  assert.deepEqual(await runRaw("session-start", "{not json"), { code: 0, stdout: "" });
+  assert.deepEqual(await runRaw("unknown", "{}"), { code: 0, stdout: "" });
+});
+
+function runHook(operation, payload) {
+  return runRaw(operation, JSON.stringify(payload));
 }
 
-function runRaw(input) {
+function runRaw(operation, input) {
   return new Promise((resolveResult) => {
-    const child = spawn(process.execPath, [hook, "user-prompt-submit"], {
+    const child = spawn(process.execPath, [hook, operation], {
       cwd: root,
-      stdio: ["pipe", "pipe", "inherit"]
+      stdio: ["pipe", "pipe", "inherit"],
     });
     let stdout = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.on("close", (code) => {
-      assert.equal(code, 0);
-      resolveResult(stdout);
-    });
+    child.on("close", (code) => resolveResult({ code, stdout }));
     child.stdin.end(input);
   });
 }

@@ -258,6 +258,38 @@ test("csx-plan-pro delegates all specialist judgments and binds consensus to one
   assert.match(skill, /Never invoke execution from a BLOCKED plan/);
 });
 
+test("canonical workflows persist artifacts before fail-open token-CAS state milestones", async () => {
+  const [plan, goal, otherSkills] = await Promise.all([
+    readSkill("csx-plan-pro"),
+    readSkill("csx-start-goal"),
+    Promise.all(skillNames
+      .filter((name) => name !== "csx-plan-pro" && name !== "csx-start-goal")
+      .map(readSkill))
+  ]);
+
+  for (const [skill, workflow, artifactDirectory] of [
+    [plan, "csx-plan-pro", ".csx/plans/"],
+    [goal, "csx-start-goal", ".csx/goals/"]
+  ]) {
+    assert.match(skill, /## Canonical Workflow State/);
+    assert.match(skill, new RegExp(`"workflow":"${workflow}"`));
+    assert.match(skill, new RegExp(artifactDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(skill, /`csx workflow begin`/);
+    assert.match(skill, /`csx workflow checkpoint`/);
+    assert.match(skill, /`csx workflow finish`/);
+    assert.match(skill, /bounded JSON request on stdin/);
+    assert.match(skill, /Retain and propagate its opaque `token` only when `ok` is `true`/);
+    assert.match(skill, /never (?:place|write) the token/i);
+    assert.match(skill, /artifact-first\/state-second order/);
+    assert.match(skill, /stale-token or (?:other|any other) .*fail-open/i);
+    assert.match(skill, /Do not create canonical workflow state for any other skill/);
+  }
+  assert.match(plan, /outcome `approved` or `blocked`/);
+  assert.match(goal, /outcome `complete`/);
+  assert.match(goal, /genuine terminal blocked or stopped decision rather than a resumable pause/);
+  for (const skill of otherSkills) assert.doesNotMatch(skill, /csx workflow begin/);
+});
+
 test("csx-start-goal uses proportional executor, deslop, final-command, and review gates", async () => {
   const skill = await readSkill("csx-start-goal");
 

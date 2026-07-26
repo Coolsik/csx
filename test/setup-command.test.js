@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import test from "node:test";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import test, { afterEach } from "node:test";
 import { fileURLToPath } from "node:url";
+import { historicalInstallationTemplate } from "../lib/historical-installations.js";
 import { ROLE_NAMES } from "../lib/presets.js";
 import { runSetupCommand } from "../lib/setup-command.js";
 
 const catalog = [{ model: "model", efforts: ["low", "high"] }];
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = resolve(root, "bin", "csx.js");
+const recoveryWorker = join(root, "test", "fixtures", "historical-recovery-worker.js");
+const temporaryRoots = [];
+afterEach(async () => Promise.all(temporaryRoots.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
 
 function matrix(reasoning = "low") {
   return Object.fromEntries(ROLE_NAMES.map((name) => [name, { model: "model", reasoning }]));
@@ -23,7 +30,7 @@ function harness(overrides = {}) {
   };
   const baseline = matrix();
   const deps = {
-    selectSetupScopeFn: (options) => {
+    selectSetupScopeFn: async (options) => {
       calls.push(["scope", options]);
       return layout;
     },
@@ -84,6 +91,35 @@ test("orchestration preserves preflight, discovery, load, and TUI order", async 
     ["Team", "custom"]
   ]);
   assert.deepEqual(tui.customPresetNames, ["Team"]);
+});
+
+test("pre-catalog historical recovery completes an H22 all-preimage bundle before catalog or TUI", async () => {
+  const project = await mkdtemp(join(tmpdir(), "csx-setup-pre-catalog-recovery-"));
+  temporaryRoots.push(project);
+  await runChecked("git", ["init", "-q", project]);
+  const anchor = join(project, "nested");
+  await seedHistorical(anchor, "h22-9af4616");
+  assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", anchor, "all-preimage"]), 81);
+  const calls = [];
+  const output = { write() {} };
+
+  await runSetupCommand({ cwd: anchor, env: { HOME: project }, output }, {
+    catalogLoader: async () => {
+      calls.push("catalog");
+      assert.deepEqual(await readdir(join(project, ".csx-transactions", "bundles")), []);
+      assert.equal(existsSync(join(project, ".codex", ".csx-install-receipt.json")), true);
+      return catalog;
+    },
+    readSetupMatrixFn: async () => matrix(),
+    builtInPresetsFn: async () => ({ Efficient: matrix() }),
+    readCustomPresetsFn: async () => ({ path: "/unused", hash: null, presets: {} }),
+    runSetupTuiFn: async () => {
+      calls.push("tui");
+      return { outcome: "cancel" };
+    }
+  });
+
+  assert.deepEqual(calls, ["catalog", "tui"]);
 });
 
 test("a legacy custom preset colliding with a new built-in is labeled as custom", async () => {
@@ -326,5 +362,44 @@ function runCli(args) {
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => resolveResult({ code, stdout, stderr }));
+  });
+}
+
+async function seedHistorical(path, id) {
+  const snapshot = historicalInstallationTemplate(id, { root: path });
+  for (const relativePath of snapshot.paths) {
+    const source = relativePath
+      .replace(/^\.agents\/skills\//, "payload/skills/")
+      .replace(/^\.codex\/agents\//, "payload/agents/")
+      .replace(/^\.codex\/hooks\//, "payload/hooks/");
+    const destination = join(path, relativePath);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, await runChecked("git", ["show", `${snapshot.commit}:${source}`], false));
+  }
+  await mkdir(join(path, ".codex"), { recursive: true });
+  await writeFile(join(path, ".codex", "config.toml"), snapshot.config);
+  await writeFile(join(path, ".codex", ".csx-install-receipt.json"), `${JSON.stringify(snapshot.receipt, null, 2)}\n`);
+}
+
+function runChecked(command, args, text = true) {
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => code === 0
+      ? resolveResult(text ? Buffer.concat(stdout).toString("utf8") : Buffer.concat(stdout))
+      : reject(new Error(`${command} failed (${code}): ${stderr}`)));
+  });
+}
+
+function runExitCode(command, args) {
+  return new Promise((resolveResult, reject) => {
+    const child = spawn(command, args, { stdio: "ignore" });
+    child.once("error", reject);
+    child.once("close", resolveResult);
   });
 }

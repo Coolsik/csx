@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -60,15 +61,43 @@ async function transactionArtifacts(root, id) {
   return result;
 }
 
-test("setup selects a receipt-owned project, rejects unmanaged project configuration, and propagates probe failures", () => {
+test("setup selects a receipt-owned project, rejects unmanaged project configuration, and propagates probe failures", async () => {
   const cwd = "/work/project";
   const env = { HOME: "/home/test" };
   const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
-  assert.equal(selectSetupScope({ cwd, env, statSync: () => { throw missing; } }).scope, "global");
-  assert.equal(selectSetupScope({ cwd, env, statSync: (path) => path.endsWith(RECEIPT_NAME) ? {} : (() => { throw missing; })() }).scope, "project");
-  assert.throws(() => selectSetupScope({ cwd, env, statSync: (path) => path.endsWith(RECEIPT_NAME) ? (() => { throw missing; })() : {} }), /unmanaged project Codex configuration/);
-  assert.throws(() => selectSetupScope({ cwd, env, statSync: () => { throw new Error("access denied"); } }), /access denied/);
+  const preflight = { projectMigrationPreflightFn: async () => ({ root: cwd, historicalCount: 0 }) };
+  assert.equal((await selectSetupScope({ cwd, env, ...preflight, statSync: () => { throw missing; } })).scope, "global");
+  assert.equal((await selectSetupScope({ cwd, env, ...preflight, statSync: (path) => path.endsWith(RECEIPT_NAME) ? {} : (() => { throw missing; })() })).scope, "project");
+  await assert.rejects(selectSetupScope({ cwd, env, ...preflight, statSync: (path) => path.endsWith(RECEIPT_NAME) ? (() => { throw missing; })() : {} }), /unmanaged project Codex configuration/);
+  await assert.rejects(selectSetupScope({ cwd, env, ...preflight, statSync: () => { throw new Error("access denied"); } }), /access denied/);
   assert.equal(CUSTOM_PRESETS_FILE, "csx-model-presets.json");
+});
+
+test("setup awaits historical migration before selecting scope", async () => {
+  const cwd = "/work/project/nested";
+  const root = "/work/project";
+  const calls = [];
+  const layout = await selectSetupScope({
+    cwd,
+    env: { HOME: "/home/test" },
+    projectMigrationPreflightFn: async () => {
+      calls.push("preflight");
+      return { root, historicalCount: 1 };
+    },
+    installFn: async (options) => {
+      calls.push(["install", options]);
+    },
+    statSync: (path) => {
+      calls.push(["stat", path]);
+      if (path.endsWith(RECEIPT_NAME)) return {};
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+  });
+  assert.equal(layout.root, root);
+  assert.deepEqual(calls.slice(0, 2), [
+    "preflight",
+    ["install", { scope: "project", cwd, env: { HOME: "/home/test" } }]
+  ]);
 });
 
 test("Efficient, Balanced, and Strong define Leader plus seven agents", async () => {
@@ -263,7 +292,7 @@ test("setup snapshots the complete installation target while limiting writes to 
       return catalog;
     }, transactionFactory: async (declaration) => {
       initialSnapshotSet = declaration.snapshotSet;
-      return declaredTransaction((value) => { request = value; }, { write: async (path, text) => { writes.push({ path, text }); await writeFile(path, text); }, commit: async () => {}, rollback: async () => {} })(declaration);
+      return declaredTransaction((value) => { request = value; }, { write: async (path, text, options) => { writes.push({ path, text, options }); await writeFile(path, text); }, commit: async () => {}, rollback: async () => {} })(declaration);
     } });
     assert.deepEqual(request.writeSet, [paths[0], receiptPath]);
     assert.deepEqual(new Set(request.snapshotSet), new Set([...paths, layout.configPath, receiptPath]));
@@ -271,6 +300,15 @@ test("setup snapshots the complete installation target while limiting writes to 
     assert.match(writes[0].text, /extra = "preserved"/);
     const receiptWrite = writes.find((write) => write.path === receiptPath);
     assert.deepEqual(JSON.parse(receiptWrite.text).setupAgentMatrix, { version: 2, roles: matrix });
+    assert.deepEqual(request.participants.flatMap(({ paths: owned }) => owned).sort(), [...request.snapshotSet].sort());
+    for (const { path, text, options } of writes) {
+      assert.deepEqual(request.finalEndpoints[path], {
+        state: "present",
+        data: Buffer.from(text).toString("base64"),
+        hash: createHash("sha256").update(text).digest("hex"),
+        mode: options.mode
+      });
+    }
     assert.deepEqual(finalProbe, { cwd: root, env: { HOME: root, CODEX_HOME: join(root, ".codex") } });
   } finally {
     await rm(root, { recursive: true, force: true });

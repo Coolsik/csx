@@ -13,6 +13,18 @@ Produce one decision-ready, versioned plan with independent review pressure. Con
 
 The skill owns role sequencing, user decisions, assignment construction, version state, consensus routing, artifact persistence, and handoff. `csx-explorer` owns repository facts, `csx-analyst` owns requirement gaps and readiness, `csx-planner` owns every draft, `csx-architect` owns architectural review, and `csx-critic` owns actionability review. The root must not substitute its own specialist judgment or rewrite a reviewed draft.
 
+## Canonical Workflow State
+
+Only after creating the repository-relative `.csx/plans/<slug>-pro.md` artifact, call `csx workflow begin` with one bounded JSON request on stdin:
+
+```json
+{"version":1,"workflow":"csx-plan-pro","phase":"drafting","artifact":".csx/plans/<slug>-pro.md"}
+```
+
+Parse the single JSON stdout result. Retain and propagate its opaque `token` only when `ok` is `true`; never place the token in the plan artifact or command arguments. A missing command, nonzero exit, malformed result, or `ok: false` is state telemetry failure only: continue the planning contract unchanged and do not retry speculatively.
+
+At every persisted review-cycle milestone, write and verify the artifact first, then send `csx workflow checkpoint` a bounded stdin JSON request containing `version: 1`, the retained `token`, the new `phase`, and the same repository-relative `artifact`. After the final `APPROVED` or `BLOCKED` artifact is written and verified, call `csx workflow finish` in the same artifact-first/state-second order with outcome `approved` or `blocked`. A stale-token or other failure is fail-open and must not alter consensus, artifact, handoff, or user-visible workflow outcome. Do not create canonical workflow state for any other skill.
+
 Every subagent assignment must state:
 
 ```text
@@ -24,7 +36,16 @@ Expected deliverable:
 Required verdict or vocabulary:
 Constraints:
 Stop conditions:
+Diagnostics trailer:
 ```
+
+For every direct subagent assignment, require the normal response body followed by this exact final nonempty line:
+
+```text
+<!-- csx-metrics:v1 {"status":"completed"} -->
+```
+
+The compact JSON may contain only `status` (`completed`, `blocked`, `failed`, or `terminated`), `reason_code` (`[a-z0-9_]{1,64}`), and `failure_detail` (at most 2048 UTF-8 bytes and only with a valid `reason_code`). Keep the complete trailer at most 6144 UTF-8 bytes. Never put prompt or artifact text, agent/thread/run IDs, workflow tokens, or other identifiers in the trailer.
 
 ## Subagent Output and Liveness Policy
 
@@ -71,7 +92,7 @@ Apply this policy to every direct subagent spawn or resume in this skill.
    - Run a fresh Architect review followed by a fresh Critic review for the new version.
 9. Repeat until consensus or a maximum of 5 review cycles. An unresolvable blocker or failure to reach consensus after cycle 5 produces a BLOCKED artifact containing the best draft and unresolved blockers.
 10. Before finalization, require the final Critic result to confirm that the consensus draft matches the original request, input spec, and user decisions. If it reports a conflicting assumption or open decision that can change implementation, reconcile it with the user and start a new versioned review cycle.
-11. Write `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`. Place the exact Planner body reviewed in the consensus cycle inside the artifact envelope without modification. Append the exact Architect and Critic results, Review Ledger, and handoff as provenance outside that immutable body.
+11. Write `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`. Place the exact Planner body reviewed in the consensus cycle inside the artifact envelope without modification. Append the exact Architect and Critic results, Review Ledger, and handoff as provenance outside that immutable body. Persist each artifact milestone before its canonical workflow checkpoint, and persist the terminal artifact before `finish`.
 
 ## Material Change Rule
 

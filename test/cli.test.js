@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pty from "node-pty";
+import { promisify } from "node:util";
 import test from "node:test";
 import { install } from "../lib/install.js";
 import { AGENT_NAMES, ROLE_NAMES, presetMatrix } from "../lib/presets.js";
@@ -12,6 +13,7 @@ import { AGENT_NAMES, ROLE_NAMES, presetMatrix } from "../lib/presets.js";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = resolve(root, "bin", "csx.js");
 const harness = resolve(root, "test", "fixtures", "setup-tui-harness.js");
+const exec = promisify(execFile);
 const ENTER = "\r";
 const DOWN = "\u001b[B";
 const ESC = "\u001b";
@@ -33,6 +35,164 @@ test("install and setup command boundaries reject invalid non-interactive use", 
   const setupArgs = await run([cli, "setup", "--preset", "Low"]);
   assert.equal(setupArgs.code, 1);
   assert.match(setupArgs.stderr, /setup does not accept arguments/);
+});
+
+test("workflow CLI uses one bounded JSON stdin/stdout protocol and fails open", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "csx-workflow-cli-"));
+  const artifact = ".csx/plans/cli-pro.md";
+  try {
+    await mkdir(join(directory, ".csx", "plans"), { recursive: true });
+    await writeFile(join(directory, artifact), "draft");
+    const begin = await run([cli, "workflow", "begin"], {
+      input: JSON.stringify({
+        version: 1,
+        projectRoot: directory,
+        workflow: "csx-plan-pro",
+        phase: "drafting",
+        artifact
+      })
+    });
+    assert.equal(begin.code, 0);
+    assert.equal(begin.stderr, "");
+    const beginResult = JSON.parse(begin.stdout);
+    assert.equal(begin.stdout, `${JSON.stringify(beginResult)}\n`);
+    assert.deepEqual(Object.keys(beginResult), [
+      "schema", "version", "ok", "operation", "code", "token", "state"
+    ]);
+    assert.equal(beginResult.schema, "csx.workflow-result");
+    assert.equal(beginResult.ok, true);
+    assert.equal(beginResult.operation, "begin");
+    assert.equal("instanceToken" in beginResult.state, false);
+
+    const stale = await run([cli, "workflow", "checkpoint"], {
+      input: JSON.stringify({
+        version: 1,
+        projectRoot: directory,
+        token: "A".repeat(43),
+        phase: "review",
+        artifact
+      })
+    });
+    assert.equal(stale.code, 0);
+    assert.equal(stale.stderr, "");
+    assert.equal(stale.stdout, "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"checkpoint\",\"code\":\"token_mismatch\"}\n");
+
+    const malformed = await run([cli, "workflow", "finish"], { input: "{" });
+    assert.equal(malformed.code, 0);
+    assert.equal(malformed.stderr, "");
+    assert.equal(malformed.stdout, "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"finish\",\"code\":\"request_malformed\"}\n");
+
+    const oversize = await run([cli, "workflow", "begin"], {
+      input: JSON.stringify({ padding: "x".repeat(65_536) })
+    });
+    assert.equal(oversize.code, 0);
+    assert.equal(oversize.stderr, "");
+    assert.equal(oversize.stdout, "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"begin\",\"code\":\"request_too_large\"}\n");
+
+    const invalid = await run([cli, "workflow", "unknown"], { input: "{}" });
+    assert.equal(invalid.code, 0);
+    assert.equal(invalid.stderr, "");
+    assert.equal(invalid.stdout, "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"unknown\",\"code\":\"invalid_operation\"}\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("workflow CLI reports unsafe Git authority as a machine failure without state controls", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "csx-workflow-cli-unsafe-"));
+  const artifact = ".csx/goals/unsafe.md";
+  try {
+    await exec("git", ["init", "-q", directory]);
+    await mkdir(join(directory, ".csx", "goals"), { recursive: true });
+    await writeFile(join(directory, artifact), "R000");
+    await mkdir(join(directory, ".codex"), { recursive: true });
+    await writeFile(
+      join(directory, ".codex", "config.toml"),
+      "# >>> csx managed >>>\n"
+    );
+
+    const result = await run([cli, "workflow", "begin"], {
+      cwd: directory,
+      input: JSON.stringify({
+        version: 1,
+        workflow: "csx-start-goal",
+        phase: "entry",
+        artifact
+      })
+    });
+    assert.deepEqual(result, {
+      code: 0,
+      stdout: "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"begin\",\"code\":\"state_unavailable\"}\n",
+      stderr: ""
+    });
+    await assert.rejects(
+      readFile(join(directory, ".csx", ".workflow-state-v1.lock")),
+      { code: "ENOENT" }
+    );
+    await assert.rejects(
+      readFile(join(directory, ".csx", ".workflow-state-v1.tmp")),
+      { code: "ENOENT" }
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("diagnostics CLI supports only bounded human and one-line JSON output", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "csx-diagnostics-cli-"));
+  const hook = join(directory, ".codex", "hooks", "csx-hook.mjs");
+  const receipt = join(directory, ".codex", ".csx-install-receipt.json");
+  try {
+    await mkdir(dirname(hook), { recursive: true });
+    await cp(resolve(root, "payload", "hooks", "csx-hook.mjs"), hook);
+    await writeFile(receipt, `${JSON.stringify({
+      version: "test",
+      scope: "project",
+      root: directory,
+      configRoot: join(directory, ".codex"),
+      files: [hook]
+    })}\n`);
+
+    const empty = await run([cli, "diagnostics"], { cwd: directory });
+    assert.deepEqual(empty, {
+      code: 0,
+      stdout: "No csx diagnostics found.\n",
+      stderr: ""
+    });
+
+    await mkdir(join(directory, ".csx", "diagnostics-v1"), { recursive: true });
+    const event = {
+      schema: "csx.diagnostic-event",
+      version: 1,
+      timestamp: new Date().toISOString(),
+      workflow: "csx-start-goal",
+      phase: "verification",
+      role: "csx-executor",
+      status: "completed"
+    };
+    await writeFile(
+      join(directory, ".csx", "diagnostics-v1", "event-0000.json"),
+      `${JSON.stringify(event)}\n`
+    );
+    const json = await run([cli, "diagnostics", "--json"], { cwd: directory });
+    assert.equal(json.code, 0);
+    assert.equal(json.stderr, "");
+    assert.equal(json.stdout, `${JSON.stringify({
+      schema: "csx.diagnostics",
+      version: 1,
+      scope: "project",
+      events: [event]
+    })}\n`);
+
+    for (const args of [["--other"], ["--json", "--json"], ["positional"]]) {
+      const invalid = await run([cli, "diagnostics", ...args], { cwd: directory });
+      assert.equal(invalid.code, 1);
+      assert.match(invalid.stderr, /diagnostics accepts only --json/);
+      assert.match(invalid.stderr, /Usage:/);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("model-first PTY assigns one role and calls Apply exactly once", async () => {
@@ -230,17 +390,19 @@ function repeat(value, count) {
   return Array.from({ length: count }, () => value);
 }
 
-function run(args) {
+function run(args, options = {}) {
   return new Promise((resolveResult) => {
     const child = spawn(process.execPath, args, {
-      cwd: root,
-      stdio: ["ignore", "pipe", "pipe"]
+      cwd: options.cwd ?? root,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
+      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"]
     });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => resolveResult({ code, stdout, stderr }));
+    if (options.input !== undefined) child.stdin.end(options.input);
   });
 }
 

@@ -33,5 +33,7 @@ Output and Stop Conditions
 
 Follow the exact structure, identifiers, version, and deliverable requested by the caller. Return a complete plan body, decisions and assumptions, verification, risks, stop conditions, blockers, and the strongest unresolved risk. Stop when the requested plan is executable without another repository-location question or when a material user decision or missing evidence prevents a defensible plan.
 
+Preserve the normal response body, then end with exactly one final nonempty diagnostics line: `<!-- csx-metrics:v1 {"status":"completed"} -->`. The compact JSON may contain only `status` (`completed`, `blocked`, `failed`, or `terminated`), `reason_code` matching `[a-z0-9_]{1,64}`, and `failure_detail` of at most 2048 UTF-8 bytes only with a valid `reason_code`; the full line must not exceed 6144 UTF-8 bytes. Never include prompt or artifact text, agent/thread/run IDs, workflow tokens, or other identifiers.
+
 You are a leaf subagent. Do not spawn or delegate to child agents. Return required clarification or adjacent review needs to the parent.
 """

@@ -1,14 +1,18 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
-import { Transaction, __setTransactionTestHooks, beginTransaction, preflightTransaction, recoverTransactions, recoveryAuthorityFromDeclaration } from "../lib/transaction.js";
+import { promisify } from "node:util";
+import { historicalInstallationTemplate, proveHistoricalInstallation } from "../lib/historical-installations.js";
+import { Transaction, __setTransactionTestHooks, beginTransaction, preflightTransaction, recoverTransactions, recoverTransactionsDetailed, recoveryAuthorityFromDeclaration } from "../lib/transaction.js";
 import { controlPath } from "../lib/transaction-lock.js";
 
 const roots = [];
+const execFileAsync = promisify(execFile);
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
 async function temporary() {
@@ -39,9 +43,10 @@ function bridgeRecord(manifest, bridge, state = "terminal") {
   };
 }
 async function seedTerminalArtifacts(manifest, { journals = true, terminals = true, bridges = true } = {}) {
+  const legacyManifest = { ...manifest, version: 2 };
   for (const { control } of manifest.roots) {
-    if (journals) await writeFile(join(control, "journals", `${manifest.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
-    if (terminals) await writeFile(join(control, "terminals", `${manifest.id}.json`), JSON.stringify(manifest), { mode: 0o600 });
+    if (journals) await writeFile(join(control, "journals", `${manifest.id}.json`), JSON.stringify(legacyManifest), { mode: 0o600 });
+    if (terminals) await writeFile(join(control, "terminals", `${manifest.id}.json`), JSON.stringify(legacyManifest), { mode: 0o600 });
   }
   if (bridges) for (const bridge of manifest.bridges) {
     await writeFile(join(bridge.control, "bridges", `${manifest.id}.json`), JSON.stringify(bridgeRecord(manifest, bridge)), { mode: 0o600 });
@@ -91,6 +96,97 @@ async function beginCrossRootTransaction() {
     writeSet: [target, metadataPath]
   });
   return { root, metadataRoot, target, metadataPath, transaction };
+}
+function presentSnapshot(data, mode = 0o600) {
+  const bytes = Buffer.from(data);
+  return { state: "present", data: bytes.toString("base64"), hash: createHash("sha256").update(bytes).digest("hex"), mode };
+}
+async function historicalParticipant(root, coordinationRoot, name) {
+  const id = name === "historical-a" ? "h21-3abc221" : "h21-8933704";
+  const template = historicalInstallationTemplate(id, { root });
+  for (const relativePath of template.paths) {
+    const source = relativePath
+      .replace(/^\.agents\/skills\//, "payload/skills/")
+      .replace(/^\.codex\/agents\//, "payload/agents/")
+      .replace(/^\.codex\/hooks\//, "payload/hooks/");
+    const destination = join(root, relativePath);
+    await mkdir(resolve(destination, ".."), { recursive: true });
+    const { stdout } = await execFileAsync("git", ["show", `${template.commit}:${source}`], { encoding: "buffer" });
+    await writeFile(destination, stdout, { mode: 0o600 });
+  }
+  const configPath = join(root, ".codex", "config.toml");
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(configPath, template.config, { mode: 0o600 });
+  await writeFile(receiptPath, `${JSON.stringify(template.receipt, null, 2)}\n`, { mode: 0o600 });
+  const proof = await proveHistoricalInstallation({ root, expectedId: id });
+  return {
+    role: "historical-installation-target",
+    root,
+    coordinationRoot,
+    configPath,
+    receiptPath,
+    paths: Object.keys(proof.preimages).sort(),
+    receipt: proof.receipt,
+    receiptSnapshot: proof.preimages[receiptPath],
+    preimages: proof.preimages
+  };
+}
+async function migrationDeclaration() {
+  const root = await temporary();
+  const historicalRootA = await temporary();
+  const historicalRootB = await temporary();
+  const metadataRoot = await temporary();
+  const canonicalConfig = join(root, "config.toml");
+  const canonicalReceipt = join(root, ".csx-install-receipt.json");
+  const canonicalManaged = join(root, "managed.txt");
+  const metadataPath = join(metadataRoot, "presets.json");
+  const historicalA = await historicalParticipant(historicalRootA, root, "historical-a");
+  const historicalB = await historicalParticipant(historicalRootB, root, "historical-b");
+  const prospective = {
+    role: "prospective-installation-target",
+    root,
+    coordinationRoot: root,
+    configPath: canonicalConfig,
+    receiptPath: canonicalReceipt,
+    paths: [canonicalConfig, canonicalReceipt, canonicalManaged],
+    preimages: {
+      [canonicalConfig]: { state: "absent" },
+      [canonicalReceipt]: { state: "absent" },
+      [canonicalManaged]: { state: "absent" }
+    }
+  };
+  const metadata = { role: "metadata-participant", root: metadataRoot, coordinationRoot: root, paths: [metadataPath], schema: { version: 1, type: "csx-metadata" } };
+  const participants = [prospective, historicalA, historicalB, metadata];
+  const snapshotSet = participants.flatMap(({ paths }) => paths);
+  const writeSet = [canonicalManaged, historicalA.paths[1], historicalA.paths[2], historicalB.paths[1], historicalB.paths[2]];
+  const finalEndpoints = {
+    [canonicalManaged]: { ...presentSnapshot("canonical-new"), mode: 0o600 },
+    [historicalA.paths[1]]: { state: "absent" },
+    [historicalA.paths[2]]: { state: "absent" },
+    [historicalB.paths[1]]: { state: "absent" },
+    [historicalB.paths[2]]: { state: "absent" }
+  };
+  return { root, historicalRootA, historicalRootB, canonicalManaged, historicalA, historicalB, participants, snapshotSet, writeSet, finalEndpoints };
+}
+async function strictCrossRootTransaction() {
+  const root = await temporary();
+  const peer = await temporary();
+  const configPath = join(root, "config.toml");
+  const receiptPath = join(root, ".csx-install-receipt.json");
+  const target = join(root, "managed.txt");
+  const metadataPath = join(peer, "presets.json");
+  const transaction = await beginTransaction({
+    operation: "install",
+    participants: [
+      { role: "prospective-installation-target", root, configPath, receiptPath, paths: [configPath, receiptPath, target], preimages: { [configPath]: { state: "absent" }, [receiptPath]: { state: "absent" }, [target]: { state: "absent" } } },
+      { role: "metadata-participant", root: peer, paths: [metadataPath], schema: { version: 1, type: "csx-metadata" } }
+    ],
+    snapshotSet: [configPath, receiptPath, target, metadataPath],
+    writeSet: [target, metadataPath],
+    finalEndpoints: { [target]: presentSnapshot("target-final"), [metadataPath]: presentSnapshot("metadata-final") }
+  });
+  return { root, peer, target, metadataPath, transaction };
 }
 
 test("recovery refuses forged peer descriptors without creating the peer control store", async () => {
@@ -654,4 +750,168 @@ test("preflight is write-free and snapshot reads reject symlinks", async () => {
     snapshotSet: [configPath, receiptPath, target],
     writeSet: [target]
   }), /snapshot path is unsafe|symlink or junction is not allowed/);
+});
+
+test("v3 bundle preserves one canonical target and two historical participants under one coordination root", async () => {
+  const declaration = await migrationDeclaration();
+  const transaction = await beginTransaction({ operation: "install", ...declaration });
+  assert.equal(transaction.manifest.version, 3);
+  assert.equal(transaction.manifest.roots.length, 1);
+  assert.equal(transaction.manifest.participants.filter(({ role }) => role === "prospective-installation-target").length, 1);
+  assert.equal(transaction.manifest.participants.filter(({ role }) => role === "historical-installation-target").length, 2);
+  assert.equal(new Set(transaction.manifest.participants.map(({ coordinationRoot }) => coordinationRoot)).size, 1);
+  const bundle = JSON.parse(await readFile(join(transaction.manifest.roots[0].control, "bundles", `${transaction.id}.json`), "utf8"));
+  assert.deepEqual(bundle.participants, transaction.manifest.participants);
+  assert.deepEqual(bundle.writeSet, transaction.manifest.writeSet);
+  assert.deepEqual(bundle.finalEndpoints, transaction.manifest.finalEndpoints);
+  assert.equal(bundle.authorityHash, transaction.manifest.authorityHash);
+  await transaction.rollback();
+});
+
+test("v3 rejects overlapping participant ownership before creating control state", async () => {
+  const root = await temporary();
+  const configPath = join(root, "config.toml"), receiptPath = join(root, ".csx-install-receipt.json"), target = join(root, "managed.txt");
+  await assert.rejects(beginTransaction({
+    operation: "install",
+    participants: [
+      { role: "prospective-installation-target", root, configPath, receiptPath, paths: [configPath, receiptPath, target], preimages: { [configPath]: { state: "absent" }, [receiptPath]: { state: "absent" }, [target]: { state: "absent" } } },
+      { role: "metadata-participant", root, paths: [target], schema: { version: 1, type: "csx-metadata" } }
+    ],
+    snapshotSet: [configPath, receiptPath, target],
+    writeSet: [target],
+    finalEndpoints: { [target]: presentSnapshot("final") }
+  }), /ownership overlaps/);
+  assert.equal(await readFile(controlPath(root)).catch((error) => error.code), "ENOENT");
+});
+
+test("v3 bundle publication failure occurs before bridge, journal, or target mutation", async () => {
+  const root = await temporary();
+  const configPath = join(root, "config.toml"), receiptPath = join(root, ".csx-install-receipt.json"), target = join(root, "managed.txt"), id = "bundle-boundary";
+  const declaration = {
+    id,
+    operation: "install",
+    participants: [{ role: "prospective-installation-target", root, configPath, receiptPath, paths: [configPath, receiptPath, target], preimages: { [configPath]: { state: "absent" }, [receiptPath]: { state: "absent" }, [target]: { state: "absent" } } }],
+    snapshotSet: [configPath, receiptPath, target],
+    writeSet: [target],
+    finalEndpoints: { [target]: presentSnapshot("final") }
+  };
+  await withTransactionTestHooks({ afterAuthorityBundleReplication: async () => { throw new Error("bundle publication interrupted"); } }, async () => {
+    await assert.rejects(beginTransaction(declaration), /bundle publication interrupted/);
+  });
+  assert.equal(await readFile(join(controlPath(root), "bundles", `${id}.json`), "utf8").then(Boolean), true);
+  assert.equal(await readFile(join(controlPath(root), "journals", `${id}.json`)).catch((error) => error.code), "ENOENT");
+  assert.equal(await readFile(target).catch((error) => error.code), "ENOENT");
+  await recoverTransactions(root, recoveryAuthorityFromDeclaration({ coordinationRoots: [root], participants: declaration.participants, snapshotSet: declaration.snapshotSet }));
+});
+
+test("v3 recovery accepts a missing bundle replica and rejects a divergent present replica without writes", async () => {
+  {
+    const { root, peer, transaction } = await strictCrossRootTransaction();
+    await transaction.close();
+    await rm(join(controlPath(peer), "bundles", `${transaction.id}.json`));
+    assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), [transaction.id]);
+    for (const current of [root, peer]) assert.equal(await readFile(join(controlPath(current), "bundles", `${transaction.id}.json`)).catch((error) => error.code), "ENOENT");
+  }
+  {
+    const { root, peer, target, transaction } = await strictCrossRootTransaction();
+    await transaction.close();
+    const peerBundle = join(controlPath(peer), "bundles", `${transaction.id}.json`);
+    const changed = JSON.parse(await readFile(peerBundle, "utf8"));
+    changed.operation = "uninstall";
+    await writeFile(peerBundle, JSON.stringify(changed), { mode: 0o600 });
+    const journalBefore = await readFile(join(controlPath(root), "journals", `${transaction.id}.json`), "utf8");
+    await assert.rejects(recoverTransactions(root, recoveryAuthority(transaction)), /authority bundle|bundle replicas disagree|recovery_required/);
+    assert.equal(await readFile(target).catch((error) => error.code), "ENOENT");
+    assert.equal(await readFile(join(controlPath(root), "journals", `${transaction.id}.json`), "utf8"), journalBefore);
+  }
+});
+
+test("v3 recovery closes all-preimage and all-final states but leaves mixed state untouched", async () => {
+  {
+    const { root, transaction } = await strictCrossRootTransaction();
+    await transaction.close();
+    assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), [transaction.id]);
+  }
+  {
+    const { root, target, metadataPath, transaction } = await strictCrossRootTransaction();
+    await transaction.write(target, "target-final");
+    await transaction.write(metadataPath, "metadata-final");
+    await transaction.close();
+    assert.deepEqual(await recoverTransactionsDetailed(root, recoveryAuthority(transaction)), {
+      recovered: [transaction.id],
+      transactions: []
+    });
+    assert.equal(await readFile(target, "utf8"), "target-final");
+    assert.equal(await readFile(metadataPath, "utf8"), "metadata-final");
+  }
+  {
+    const { root, target, metadataPath, transaction } = await strictCrossRootTransaction();
+    await transaction.write(target, "target-final");
+    await transaction.close();
+    await assert.rejects(recoverTransactions(root, recoveryAuthority(transaction)), /mixed or unsafe|recovery_required/);
+    assert.equal(await readFile(target, "utf8"), "target-final");
+    assert.equal(await readFile(metadataPath).catch((error) => error.code), "ENOENT");
+  }
+});
+
+test("v3 bundle-less nonterminal and ready bridge states fail closed while terminal and intent residue clean up", async () => {
+  {
+    const { root, peer, target, transaction } = await strictCrossRootTransaction();
+    await transaction.close();
+    for (const current of [root, peer]) await rm(join(controlPath(current), "bundles", `${transaction.id}.json`));
+    const journal = join(controlPath(root), "journals", `${transaction.id}.json`);
+    const before = await readFile(journal, "utf8");
+    await assert.rejects(recoverTransactions(root, recoveryAuthority(transaction)), /bundle-less nonterminal|recovery_required/);
+    assert.equal(await readFile(target).catch((error) => error.code), "ENOENT");
+    assert.equal(await readFile(journal, "utf8"), before);
+  }
+  {
+    const { root, peer, transaction } = await strictCrossRootTransaction();
+    await transaction.close();
+    for (const current of [root, peer]) {
+      await rm(join(controlPath(current), "bundles", `${transaction.id}.json`));
+      const journalPath = join(controlPath(current), "journals", `${transaction.id}.json`);
+      const terminal = { ...JSON.parse(await readFile(journalPath, "utf8")), status: "committed" };
+      await writeFile(journalPath, JSON.stringify(terminal), { mode: 0o600 });
+      const bridgePath = join(controlPath(current), "bridges", `${transaction.id}.json`);
+      const bridge = { ...JSON.parse(await readFile(bridgePath, "utf8")), state: "intent" };
+      await writeFile(bridgePath, JSON.stringify(bridge), { mode: 0o600 });
+    }
+    assert.deepEqual(await recoverTransactions(root, recoveryAuthority(transaction)), []);
+    for (const current of [root, peer]) for (const directory of ["journals", "bridges"]) {
+      assert.equal(await readFile(join(controlPath(current), directory, `${transaction.id}.json`)).catch((error) => error.code), "ENOENT");
+    }
+  }
+  {
+    const { root, peer, target, transaction } = await strictCrossRootTransaction();
+    await transaction.close();
+    for (const current of [root, peer]) {
+      await rm(join(controlPath(current), "bundles", `${transaction.id}.json`));
+      await rm(join(controlPath(current), "journals", `${transaction.id}.json`));
+      const bridgePath = join(controlPath(current), "bridges", `${transaction.id}.json`);
+      const bridge = JSON.parse(await readFile(bridgePath, "utf8"));
+      bridge.state = "ready";
+      await writeFile(bridgePath, JSON.stringify(bridge), { mode: 0o600 });
+    }
+    await assert.rejects(recoverTransactions(root, recoveryAuthority(transaction)), /mutation-capable bridge|recovery_required/);
+    assert.equal(await readFile(target).catch((error) => error.code), "ENOENT");
+  }
+});
+
+test("v3 cleanup deletes authority bundles after every other transaction record", async () => {
+  const { root, peer, target, metadataPath, transaction } = await strictCrossRootTransaction();
+  await transaction.write(target, "target-final");
+  await transaction.write(metadataPath, "metadata-final");
+  let ordinaryDeletions = 0;
+  let bundleDeletions = 0;
+  await withTransactionTestHooks({
+    afterCleanupRootDeletion: async () => {
+      ordinaryDeletions += 1;
+      for (const current of [root, peer]) assert.equal(await readFile(join(controlPath(current), "bundles", `${transaction.id}.json`), "utf8").then(Boolean), true);
+    },
+    afterAuthorityBundleDeletion: async () => { bundleDeletions += 1; }
+  }, async () => transaction.commit());
+  assert.ok(ordinaryDeletions > 0);
+  assert.equal(bundleDeletions, 2);
+  for (const current of [root, peer]) assert.equal(await readFile(join(controlPath(current), "bundles", `${transaction.id}.json`)).catch((error) => error.code), "ENOENT");
 });

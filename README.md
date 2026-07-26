@@ -1,10 +1,10 @@
 # csx
 
-csx installs a small set of Codex-native workflow skills, custom agents, and an
-explicit prompt-routing hook. It has no background service, MCP server, or
-Codex plugin. Mutating commands require the optional native
-`fs-ext-extra-prebuilt@2.2.9` package at runtime and fail closed when that
-capability is unavailable.
+csx installs a small set of explicitly invoked Codex-native workflow skills,
+custom agents, and lifecycle hooks. It does not route prompts and has no
+background service, MCP server, or Codex plugin. Mutating commands require the
+optional native `fs-ext-extra-prebuilt@2.2.9` package at runtime and fail closed
+when that capability is unavailable.
 
 ## Requirements
 
@@ -59,7 +59,7 @@ still disable the feature.
 csx refuses to overwrite same-name files unless its installation receipt proves
 they are managed by csx. Existing config outside the marked csx block is
 preserved. Start a new Codex session after installation. Codex will ask you to
-review and trust the command hook on first use.
+review and trust the SessionStart and SubagentStop command hooks on first use.
 ## Setup
 
 ```bash
@@ -146,10 +146,8 @@ $csx-deslop clean this bounded change without changing behavior
 $csx-code-review review the current changes
 ```
 
-The hook also recognizes prompts beginning with `csx analyze`, `csx spec`,
-`csx plan`, `csx plan-pro`, `csx start-goal`, `csx deslop`, or
-`csx code-review`. Ordinary natural-language prompts are not routed. Skills,
-including `csx-deslop`, use explicit invocation rather than implicit routing.
+There is no UserPromptSubmit hook or prompt routing. Skills, including
+`csx-deslop`, run only through explicit `$csx-*` invocation.
 
 Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
 architect, critic, executor, and code-reviewer.
@@ -197,6 +195,97 @@ goal artifact. Findings outside accepted scope or concrete change-induced safety
 and regression risks are recorded as optional hardening rather than silently
 expanding the goal.
 
+## Lifecycle state and authority
+
+An installation adds two self-contained command hooks: SessionStart restores an
+eligible workflow, and SubagentStop records eligible local diagnostics. Each
+hook command carries its exact `project` or `global` scope and absolute
+installation root. The copied hook accepts that authority only when its running
+file and installation receipt prove exact receipt ownership. Missing, malformed,
+partially present, symlinked, or otherwise unsafe authority fails closed.
+
+Only `csx-plan-pro` and `csx-start-goal` publish lifecycle state. Each linked
+worktree owns `.csx/workflow-state-v1.json` at its own top level; the common Git
+directory is never used. There is at most one active workflow, identified by an
+opaque token. Checkpoint and finish are compare-and-swap operations, so a stale
+token cannot alter the current workflow. SessionStart restores only an active,
+schema-valid state whose recorded artifact is still a valid unchanged file
+under the workflow's allowed `.csx/plans/` or `.csx/goals/` directory. The state
+is project data, is not removed by `csx uninstall`, and therefore survives a
+later reinstall.
+
+Project authority takes precedence over global authority:
+
+- A valid project installation wins, even when its workflow state is absent or
+  invalid.
+- A genuinely absent project installation permits global fallback.
+- An unsafe project installation blocks both project restore and global
+  fallback.
+- After project uninstall removes that authority, global fallback is restored.
+
+Linked worktrees remain isolated even when they share a Git common directory.
+
+## Local diagnostics
+
+```bash
+csx diagnostics
+csx diagnostics --json
+```
+
+The command reads the current linked worktree's `.csx/diagnostics-v1` directory
+under the same project-over-global authority rule. `--json` emits one
+`csx.diagnostics` version 1 envelope containing `scope` and an `events` array.
+Human output uses the same validated events.
+
+SubagentStop writes only when a valid active `csx-plan-pro` or
+`csx-start-goal` state exists and the exact running hook receipt owns the
+allowlisted `csx-*` agent role. Events contain bounded workflow, phase, role,
+status, timestamp, and optional reason metadata. They exclude raw prompts,
+responses, workflow tokens, agent/thread/session IDs, and cwd or filesystem
+paths. `failure_detail` is accepted only with a valid `reason_code` and is
+limited to 2,048 UTF-8 bytes. It remains caller-supplied free text, so complete
+privacy sanitization is not promised; producers should keep sensitive content
+out of it.
+
+The writer is fail-open and performs 30-day cleanup on a best-effort basis.
+The fixed namespace has an exact logical-content cap of
+`2304 finals × 4096 + 64 temps × 4096 + 64 zero-byte reservations = 9,699,328 bytes`.
+This is a logical byte limit, not an exact filesystem block-usage claim.
+Diagnostics are local only: there is no remote upload, background process, or
+write-ahead log.
+
+## Historical installation migration
+
+Install, uninstall, and setup recognize exactly these seven historical
+receipt/config/payload signatures:
+
+- H21 at `3abc221`
+- H21 at `8933704`
+- H21 at `64de366`, in its fresh and setup forms
+- H23 at `a221623`, in its fresh and setup forms
+- H22 at `9af4616`
+
+Adoption and removal require the complete exact signature. Near matches,
+receipt-less installations, and unowned files are not adopted or removed.
+Unsupported or unsafe historical state stops before mutation. `csx setup` runs
+this migration gate before model catalog discovery or the TUI.
+
+Concurrent mutation by mixed current and old csx versions is unsupported, as is
+concurrent mutation involving nested historical installation roots. No
+mixed-version compatibility mechanism is provided.
+
+## Transaction recovery
+
+Transaction format v3 records all participants in one immutable,
+multi-participant authority bundle. Participant ownership must not overlap.
+Every bundle replica is durable before any bridge, journal, or target mutation,
+and bundle replicas are removed only after all other transaction records.
+
+Recovery writes no target when a preimage, final endpoint, authority bundle, or
+bundle replica is ambiguous; it reports `recovery_required` instead. Recovery
+is local and provides no remote write-ahead log, mixed-version compatibility
+protocol, or non-Linux durability-parity promise.
+
 ## Uninstall
 
 ```bash
@@ -204,9 +293,11 @@ csx uninstall
 ```
 
 The command first checks the current directory for a receipt-backed project
-installation. If the current directory has no receipt, it removes the global
-installation. It deletes only receipt-owned files and the csx-managed config
-blocks, restoring any Leader assignments and
+installation. A valid project installation wins; a genuinely absent project
+installation permits global fallback, while unsafe project authority stops
+without falling back. Removing the project installation restores global
+fallback for later lifecycle sessions. Uninstall deletes only receipt-owned
+files and the csx-managed config blocks, restoring any Leader assignments and
 `default_mode_request_user_input` value that installation temporarily
 overrode, while preserving other settings and non-empty directories.
 
@@ -216,9 +307,9 @@ The npm CLI remains installed. Remove it separately:
 npm uninstall -g @coolsik/csx
 ```
 
-Older `csx-local` Codex plugin installations are not migrated automatically.
-Remove those separately with the Codex plugin command before or after installing
-this package.
+Receipt-less or otherwise unowned `csx-local` Codex plugin installations are
+not migrated automatically. Remove those separately with the Codex plugin
+command before or after installing this package.
 
 ## Development
 

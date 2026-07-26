@@ -11,6 +11,18 @@ Execute an accepted input with one Codex goal and a compact Markdown control art
 
 The skill owns execution authority, aggregate goal state, assignment construction, dependency scheduling, artifact persistence, proportionality enforcement, rework routing, review invalidation, and final completion. `csx-planner` owns execution-goal decomposition, `csx-executor` owns implementation and rework, `$csx-deslop` owns bounded post-implementation cleanup, and `$csx-code-review` owns cumulative change review. The root may execute the exact accepted final verification commands and record their raw results, but must not weaken, reinterpret, or replace them.
 
+## Canonical Workflow State
+
+After creating or resuming the repository-relative `.csx/goals/<slug>.md` control artifact and persisting its current entry state, call `csx workflow begin` with one bounded JSON request on stdin:
+
+```json
+{"version":1,"workflow":"csx-start-goal","phase":"entry","artifact":".csx/goals/<slug>.md"}
+```
+
+Parse the single JSON stdout result. Retain and propagate its opaque `token` only when `ok` is `true`; never write the token into the goal artifact or pass JSON content through command arguments. A missing command, nonzero exit, malformed result, or `ok: false` is state telemetry failure only: continue the execution contract unchanged and do not retry speculatively.
+
+Whenever the control artifact records a material phase transition or current revision milestone, persist and verify the artifact first, then call `csx workflow checkpoint` with bounded JSON stdin containing `version: 1`, the retained `token`, the new `phase`, and the same repository-relative `artifact`. After the completed artifact is persisted and verified, call `csx workflow finish` in the same artifact-first/state-second order with phase `complete` and outcome `complete`. If this workflow reaches a genuine terminal blocked or stopped decision rather than a resumable pause, finish with outcome `blocked` or `stopped`; otherwise leave the active state at its latest checkpoint. A stale-token or any other state failure is fail-open and must not change goal status, evidence, retry counters, review decisions, or `update_goal` behavior. Do not create canonical workflow state for any other skill.
+
 Every subagent assignment must state:
 
 ```text
@@ -22,7 +34,16 @@ Expected deliverable:
 Required verdict or vocabulary:
 Constraints:
 Stop conditions:
+Diagnostics trailer:
 ```
+
+For every direct subagent assignment, require the normal response body followed by this exact final nonempty line:
+
+```text
+<!-- csx-metrics:v1 {"status":"completed"} -->
+```
+
+The compact JSON may contain only `status` (`completed`, `blocked`, `failed`, or `terminated`), `reason_code` (`[a-z0-9_]{1,64}`), and `failure_detail` (at most 2048 UTF-8 bytes and only with a valid `reason_code`). Keep the complete trailer at most 6144 UTF-8 bytes. Never put prompt or artifact text, agent/thread/run IDs, workflow tokens, or other identifiers in the trailer.
 
 ## Subagent Output and Liveness Policy
 
@@ -48,7 +69,7 @@ Apply this policy to every direct subagent spawn or resume in this skill.
    - For a csx pro plan, accept only `Decision: APPROVED`.
    - Reject every `BLOCKED` plan and every plan handed over without the user's explicit `Start execution with $csx-start-goal` selection or an equivalent current-turn request that names `$csx-start-goal` and the accepted plan.
 2. Preserve the accepted input as binding execution context. Preserve its scope, non-goals, constraints, acceptance criteria, decisions, assumptions, Verification Matrix, risks, and stop conditions.
-3. Call `get_goal` before creating anything. Use exactly one aggregate Codex goal for the entire accepted plan. Resume the same goal and artifact when active, stop for a different active goal, and otherwise call `create_goal` once.
+3. Call `get_goal` before creating anything. Use exactly one aggregate Codex goal for the entire accepted plan. Resume the same goal and artifact when active, stop for a different active goal, and otherwise call `create_goal` once. Persist the created or resumed control artifact before beginning canonical workflow state.
 
 ## Proportionality and Scope Control
 
@@ -203,4 +224,4 @@ Complete only when:
 - the final code review returns `APPROVE`;
 - no product code changed afterward.
 
-Then mark goals `complete`, write the completion decision, and call `update_goal` with `complete` exactly once.
+Then mark goals `complete`, write the completion decision, finish canonical workflow state after that artifact write, and call `update_goal` with `complete` exactly once.

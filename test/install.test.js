@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   FEATURE_MANAGED_END,
   FEATURE_MANAGED_START,
@@ -17,8 +19,14 @@ import {
   windowsCommand
 } from "../lib/install.js";
 import { AGENT_NAMES, LEGACY_VERIFIER_NAME, presetMatrix } from "../lib/presets.js";
+import { beginTransaction, recoverTransactions } from "../lib/transaction.js";
+import {
+  HISTORICAL_INSTALLATION_FAMILIES,
+  historicalInstallationTemplate
+} from "../lib/historical-installations.js";
 
 const roots = [];
+const recoveryWorker = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "historical-recovery-worker.js");
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -81,7 +89,10 @@ test("global install applies Balanced Leader while preserving the original for u
   assert.match(config, /model_reasoning_effort = "max"/);
   assert.doesNotMatch(config, /model = "example"/);
   assert.match(config, new RegExp(MANAGED_START));
-  assert.match(config, /\[\[hooks\.UserPromptSubmit\]\]/);
+  assert.match(config, /\[\[hooks\.SessionStart\]\]/);
+  assert.match(config, /\[\[hooks\.SubagentStop\]\]/);
+  assert.doesNotMatch(config, /UserPromptSubmit|user-prompt-submit|skill routing/i);
+  assert.equal((config.match(/\[\[hooks\./g) ?? []).length, 2);
   assert.doesNotMatch(config, /\[agents\.csx-verifier\]/);
   assert.match(config, /\[features\]\ndefault_mode_request_user_input = true/);
 
@@ -104,8 +115,8 @@ test("repeat install migrates an exact legacy verifier receipt and restores the 
     'model = "legacy-user-model"\nmodel_reasoning_effort = "high"\n\n'
   );
   config = config.replace(
-    "[[hooks.UserPromptSubmit]]",
-    `[agents.${LEGACY_VERIFIER_NAME}]\nconfig_file = "./agents/${LEGACY_VERIFIER_NAME}.toml"\n\n[[hooks.UserPromptSubmit]]`
+    "[[hooks.SessionStart]]",
+    `[agents.${LEGACY_VERIFIER_NAME}]\nconfig_file = "./agents/${LEGACY_VERIFIER_NAME}.toml"\n\n[[hooks.SessionStart]]`
   );
   await writeFile(configPath, config);
   await writeFile(verifierPath, 'model = "legacy-verifier"\nmodel_reasoning_effort = "high"\n');
@@ -206,8 +217,24 @@ test("explicit project root supports a non-Git directory and paths with spaces",
   assert.match(config, /command = "node '/);
   assert.match(config, /commandWindows = "node \\"/);
   assert.equal(
-    windowsCommand("C:\\Users\\Test User\\csx\\hook.mjs"),
-    'node "C:\\Users\\Test User\\csx\\hook.mjs" user-prompt-submit'
+    windowsCommand(
+      "C:\\Users\\Test User\\csx\\hook.mjs",
+      "session-start",
+      "project",
+      "C:\\Users\\Test User\\project",
+    ),
+    'node "C:\\Users\\Test User\\csx\\hook.mjs" session-start --authority-scope project ' +
+      '--authority-root "C:\\Users\\Test User\\project"'
+  );
+  assert.equal(
+    windowsCommand(
+      "C:\\Users\\Test User\\csx\\hook.mjs",
+      "subagent-stop",
+      "global",
+      "C:\\Users\\Test User\\.codex",
+    ),
+    'node "C:\\Users\\Test User\\csx\\hook.mjs" subagent-stop --authority-scope global ' +
+      '--authority-root "C:\\Users\\Test User\\.codex"'
   );
 });
 
@@ -229,7 +256,7 @@ test("fresh install declares complete preimages and commits the receipt last", a
       return {
         ...transaction,
         async write(path, data, options) {
-          calls[0].writes.push(path);
+          calls[0].writes.push({ path, data: Buffer.from(data), options });
           await transaction.write(path, data, options);
         }
       };
@@ -243,9 +270,90 @@ test("fresh install declares complete preimages and commits the receipt last", a
   assert.equal(declaration.participants[0].role, "prospective-installation-target");
   assert.equal(declaration.snapshotSet.includes(receiptPath), true);
   assert.deepEqual([...declaration.snapshotSet].sort(), [...declaration.writeSet].sort());
-  assert.equal(writes.at(-1), receiptPath);
+  assert.equal(writes.at(-1).path, receiptPath);
   assert.deepEqual(Object.keys(declaration.participants[0].preimages).sort(), [...declaration.snapshotSet].sort());
   assert.equal(declaration.participants[0].preimages[receiptPath].state, "absent");
+  assert.deepEqual(declaration.recoveryAuthority.participants, declaration.participants);
+  assert.deepEqual(declaration.recoveryAuthority.paths, [...declaration.snapshotSet].sort());
+  assert.deepEqual(declaration.recoveryAuthority.roots, declaration.coordinationRoots);
+  for (const { path, data, options } of writes) {
+    assert.deepEqual(declaration.finalEndpoints[path], {
+      state: "present",
+      data: data.toString("base64"),
+      hash: createHash("sha256").update(data).digest("hex"),
+      mode: options.mode
+    });
+  }
+});
+test("install endpoint mismatch fails before the first payload write", async () => {
+  const root = await temporary("endpoint mismatch ");
+  let firstPath;
+  const mismatchingApi = {
+    recoverTransactions,
+    async beginTransaction(declaration) {
+      firstPath = declaration.writeSet[0];
+      const wrong = Buffer.from("wrong endpoint");
+      const finalEndpoints = Object.fromEntries(Object.entries(declaration.finalEndpoints).map(([path, endpoint]) => [
+        path,
+        endpoint.state === "absent" ? endpoint : {
+          ...endpoint,
+          data: wrong.toString("base64"),
+          hash: createHash("sha256").update(wrong).digest("hex")
+        }
+      ]));
+      return beginTransaction({ ...declaration, finalEndpoints });
+    }
+  };
+
+  await assert.rejects(
+    installCore({ scope: "project", projectRoot: root, transactionApi: mismatchingApi }),
+    /transaction write differs from declared final endpoint/
+  );
+  assert.equal(existsSync(firstPath), false);
+  assert.equal(existsSync(join(root, ".codex", ".csx-install-receipt.json")), false);
+});
+test("repeat install and uninstall use exact v3 lifecycle declarations", async () => {
+  const root = await temporary("lifecycle declarations ");
+  await install({ scope: "project", projectRoot: root });
+  const declarations = [];
+  const mutations = [];
+  const recordingApi = {
+    recoverTransactions: transactionApi.recoverTransactions,
+    async beginTransaction(declaration) {
+      declarations.push(declaration);
+      const transaction = await transactionApi.beginTransaction(declaration);
+      return {
+        ...transaction,
+        async write(path, data, options) {
+          mutations.push({ operation: declaration.operation, kind: "write", path });
+          await transaction.write(path, data, options);
+        },
+        async remove(path) {
+          mutations.push({ operation: declaration.operation, kind: "remove", path });
+          await transaction.remove(path);
+        }
+      };
+    }
+  };
+
+  await installCore({ scope: "project", projectRoot: root, transactionApi: recordingApi });
+  await uninstallCore({ projectRoot: root, transactionApi: recordingApi });
+
+  assert.deepEqual(declarations.map(({ operation }) => operation), ["install", "uninstall"]);
+  for (const declaration of declarations) {
+    assert.equal(declaration.participants.length, 1);
+    assert.deepEqual(Object.keys(declaration.finalEndpoints).sort(), declaration.writeSet);
+    assert.deepEqual(declaration.recoveryAuthority.participants, declaration.participants);
+    assert.deepEqual(declaration.recoveryAuthority.paths, declaration.snapshotSet);
+  }
+  assert.equal(declarations[0].participants[0].role, "existing-installation-target");
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  assert.deepEqual(declarations[1].finalEndpoints[receiptPath], { state: "absent" });
+  assert.deepEqual(mutations.filter(({ operation }) => operation === "uninstall").at(-1), {
+    operation: "uninstall",
+    kind: "remove",
+    path: receiptPath
+  });
 });
 test("install rejects config drift that occurs before transaction authority", async () => {
   const root = await temporary("config drift ");
@@ -372,6 +480,29 @@ test("repeat install updates receipt-owned files", async () => {
   const config = await readFile(join(root, ".codex", "config.toml"), "utf8");
   assert.equal(config.split(MANAGED_START).length - 1, 1);
   assert.equal(config.split(FEATURE_MANAGED_START).length - 1, 1);
+});
+test("repeat install upgrades the old managed prompt router without touching user hooks", async () => {
+  const root = await temporary("routing upgrade ");
+  await install({ scope: "project", projectRoot: root });
+  const configPath = join(root, ".codex", "config.toml");
+  const current = await readFile(configPath, "utf8");
+  const legacy = current.replace(
+    /\[\[hooks\.SessionStart\]\][\s\S]*?\n\n\[\[hooks\.SubagentStop\]\][\s\S]*?(?=\n# <<< csx managed <<<)/,
+    '[[hooks.UserPromptSubmit]]\nhooks = [{ type = "command", command = "node old-hook.mjs user-prompt-submit" }]'
+  );
+  await writeFile(configPath, `${legacy}\n[[hooks.Notification]]\nhooks = [{ type = "command", command = "user-owned" }]\n`);
+
+  await install({ scope: "project", projectRoot: root });
+
+  const upgraded = await readFile(configPath, "utf8");
+  const managed = upgraded.slice(
+    upgraded.indexOf(MANAGED_START),
+    upgraded.indexOf(MANAGED_END) + MANAGED_END.length
+  );
+  assert.match(managed, /\[\[hooks\.SessionStart\]\]/);
+  assert.match(managed, /\[\[hooks\.SubagentStop\]\]/);
+  assert.doesNotMatch(managed, /UserPromptSubmit|user-prompt-submit/);
+  assert.match(upgraded, /\[\[hooks\.Notification\]\][\s\S]*command = "user-owned"/);
 });
 test("repeat install retains valid receipt setup agent selections", async () => {
   const root = await temporary("repeat setup receipt ");
@@ -697,6 +828,377 @@ test("uninstall recovers candidates strictly in project-first precedence order",
   assert.deepEqual(recovered, [resolve(project), resolve(globalRoot)]);
 });
 
+test("all-final current project uninstall re-entry preserves a coexisting global install", async () => {
+  const home = await temporary("current uninstall global all-final ");
+  const root = await temporary("current uninstall project all-final ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  await mkdir(anchor, { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  await installCore({ scope: "project", cwd: anchor });
+  const globalPaths = [
+    join(home, ".codex", ".csx-install-receipt.json"),
+    join(home, ".codex", "config.toml"),
+    join(home, ".codex", "hooks", "csx-hook.mjs")
+  ];
+  const projectPaths = [
+    join(root, ".codex", ".csx-install-receipt.json"),
+    join(root, ".codex", "hooks", "csx-hook.mjs"),
+    join(root, ".agents", "skills", "csx-plan", "SKILL.md")
+  ];
+  const globalBefore = await Promise.all(globalPaths.map((path) => readFile(path)));
+
+  assert.equal(
+    await runExitCode(process.execPath, [recoveryWorker, "uninstall", anchor, "all-final"], {
+      env: { ...process.env, HOME: home }
+    }),
+    82
+  );
+  assert.deepEqual(await uninstallCore({ cwd: anchor, env: { HOME: home } }), {
+    removed: true,
+    scope: "project",
+    root
+  });
+
+  assert.deepEqual(projectPaths.map((path) => existsSync(path)), [false, false, false]);
+  assert.deepEqual(await Promise.all(globalPaths.map((path) => readFile(path))), globalBefore);
+});
+
+for (const [label, mutate] of [
+  ["operation-only", (bundle) => {
+    bundle.operation = "install";
+  }],
+  ["operation and canonical receipt endpoint", (bundle) => {
+    bundle.operation = "install";
+    const canonical = bundle.participants.find(({ role }) => role === "existing-installation-target");
+    bundle.finalEndpoints[canonical.receiptPath] = bundle.preimages[canonical.receiptPath];
+  }]
+]) {
+  test(`all-final current project uninstall rejects re-signed ${label} authority before global mutation`, async () => {
+    const home = await temporary(`re-signed ${label} global `);
+    const root = await temporary(`re-signed ${label} project `);
+    await runProcess("git", ["init", "-q", root]);
+    const anchor = join(root, "nested");
+    await mkdir(anchor, { recursive: true });
+    await installCore({ scope: "global", env: { HOME: home } });
+    await installCore({ scope: "project", cwd: anchor });
+    const globalPaths = [
+      join(home, ".codex", ".csx-install-receipt.json"),
+      join(home, ".codex", "config.toml"),
+      join(home, ".codex", "hooks", "csx-hook.mjs")
+    ];
+    const globalBefore = await Promise.all(globalPaths.map((path) => readFile(path)));
+
+    assert.equal(
+      await runExitCode(process.execPath, [recoveryWorker, "uninstall", anchor, "all-final"], {
+        env: { ...process.env, HOME: home }
+      }),
+      82
+    );
+    const bundlePath = await onlyBundlePath(root);
+    const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
+    mutate(bundle);
+    resignBundle(bundle);
+    await writeFile(bundlePath, JSON.stringify(bundle), { mode: 0o600 });
+    const controlBefore = await snapshotControlTree(root);
+
+    await assert.rejects(
+      uninstallCore({ cwd: anchor, env: { HOME: home } }),
+      (error) => error?.code === "recovery_required"
+    );
+    assert.deepEqual(await snapshotControlTree(root), controlBefore);
+    assert.deepEqual(await Promise.all(globalPaths.map((path) => readFile(path))), globalBefore);
+  });
+}
+
+test("legacy two-method adapter suppresses global fallthrough after real project recovery", async () => {
+  const home = await temporary("legacy adapter global ");
+  const root = await temporary("legacy adapter project ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  await mkdir(anchor, { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  await installCore({ scope: "project", cwd: anchor });
+  const globalPaths = [
+    join(home, ".codex", ".csx-install-receipt.json"),
+    join(home, ".codex", "config.toml"),
+    join(home, ".codex", "hooks", "csx-hook.mjs")
+  ];
+  const globalBefore = await Promise.all(globalPaths.map((path) => readFile(path)));
+  assert.equal(
+    await runExitCode(process.execPath, [recoveryWorker, "uninstall", anchor, "all-final"], {
+      env: { ...process.env, HOME: home }
+    }),
+    82
+  );
+  const legacyAdapter = {
+    beginTransaction,
+    recoverTransactions
+  };
+
+  await assert.rejects(
+    uninstallCore({ cwd: anchor, env: { HOME: home }, transactionApi: legacyAdapter }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.deepEqual(await Promise.all(globalPaths.map((path) => readFile(path))), globalBefore);
+});
+
+test("multiple detailed recovery outcomes fail closed instead of selecting one completion", async () => {
+  const home = await temporary("ambiguous recovery global ");
+  const root = await temporary("ambiguous recovery project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalReceipt = join(home, ".codex", ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+  const ambiguousAdapter = {
+    ...transactionApi,
+    async recoverTransactionsDetailed() {
+      return {
+        recovered: ["first", "second"],
+        transactions: [
+          { id: "first", operation: "uninstall", boundary: "all-final" },
+          { id: "second", operation: "install", boundary: "all-final" }
+        ]
+      };
+    }
+  };
+
+  await assert.rejects(
+    uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: ambiguousAdapter }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.deepEqual(await readFile(globalReceipt), globalBefore);
+});
+
+test("top-level completion cannot bypass multiple detailed recovery outcomes", async () => {
+  const home = await temporary("combined ambiguous recovery global ");
+  const root = await temporary("combined ambiguous recovery project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalReceipt = join(home, ".codex", ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+  const ambiguousAdapter = {
+    ...transactionApi,
+    async recoverTransactionsDetailed() {
+      return {
+        recovered: ["first", "second"],
+        operation: "uninstall",
+        boundary: "all-final",
+        transactions: [
+          { id: "first", operation: "uninstall", boundary: "all-final" },
+          { id: "second", operation: "install", boundary: "all-final" }
+        ]
+      };
+    }
+  };
+
+  await assert.rejects(
+    uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: ambiguousAdapter }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.deepEqual(await readFile(globalReceipt), globalBefore);
+});
+
+test("top-level completion must match its single detailed recovery outcome", async () => {
+  const home = await temporary("combined recovery summary global ");
+  const root = await temporary("combined recovery summary project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalReceipt = join(home, ".codex", ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+  const adapter = (operation) => ({
+    ...transactionApi,
+    async recoverTransactionsDetailed() {
+      return {
+        recovered: ["current"],
+        operation: "uninstall",
+        boundary: "all-final",
+        transactions: [{ id: "current", operation, boundary: "all-final" }]
+      };
+    }
+  });
+
+  await assert.rejects(
+    uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter("install") }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.deepEqual(
+    await uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter("uninstall") }),
+    { removed: true, scope: "project", root }
+  );
+  assert.deepEqual(await readFile(globalReceipt), globalBefore);
+});
+
+test("opaque detailed recovery ids suppress global fallback", async () => {
+  const home = await temporary("opaque detailed recovery global ");
+  const root = await temporary("opaque detailed recovery project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalReceipt = join(home, ".codex", ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+
+  for (const result of [
+    { recovered: ["opaque"] },
+    { recovered: ["opaque"], transactions: [] }
+  ]) {
+    const adapter = {
+      ...transactionApi,
+      async recoverTransactionsDetailed() {
+        return result;
+      }
+    };
+    await assert.rejects(
+      uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter }),
+      (error) => error?.code === "recovery_required"
+    );
+    assert.deepEqual(await readFile(globalReceipt), globalBefore);
+  }
+});
+
+test("malformed detailed recovery shapes fail closed before global fallback", async () => {
+  const home = await temporary("malformed detailed recovery global ");
+  const root = await temporary("malformed detailed recovery project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalReceipt = join(home, ".codex", ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+
+  for (const result of [
+    { recovered: [] },
+    { recovered: new Array(1), transactions: [] },
+    { recovered: ["current"], operation: "install", boundary: "all-final" },
+    {
+      recovered: ["current"],
+      operation: "uninstall",
+      boundary: "all-final",
+      transactions: {}
+    },
+    {
+      recovered: ["current"],
+      transactions: [{ id: "current", operation: 7, boundary: {} }]
+    },
+    {
+      recovered: ["other"],
+      transactions: [{ id: "current", operation: "uninstall", boundary: "all-final" }]
+    }
+  ]) {
+    const adapter = {
+      ...transactionApi,
+      async recoverTransactionsDetailed() {
+        return result;
+      }
+    };
+    await assert.rejects(
+      uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter }),
+      (error) => error?.code === "recovery_required"
+    );
+    assert.deepEqual(await readFile(globalReceipt), globalBefore);
+  }
+});
+
+test("recovery outcome must agree with the receipt endpoint before scope selection", async () => {
+  const home = await temporary("recovery endpoint global ");
+  const root = await temporary("recovery endpoint project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalRoot = join(home, ".codex");
+  const globalReceipt = join(globalRoot, ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+  const adapter = (operation) => ({
+    ...transactionApi,
+    async recoverTransactionsDetailed() {
+      return {
+        recovered: ["current"],
+        transactions: [{ id: "current", operation, boundary: "all-final" }]
+      };
+    }
+  });
+
+  await assert.rejects(
+    uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter("install") }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.deepEqual(await readFile(globalReceipt), globalBefore);
+
+  await rm(join(root, ".csx-transactions"), { recursive: true, force: true });
+  await mkdir(join(globalRoot, ".csx-transactions"), { recursive: true });
+  await assert.rejects(
+    uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter("uninstall") }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.deepEqual(await readFile(globalReceipt), globalBefore);
+});
+
+test("injected adapters cannot impersonate the historical recovery producer", async () => {
+  const home = await temporary("historical producer authority global ");
+  const root = await temporary("historical producer authority project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalPaths = [
+    join(home, ".codex", ".csx-install-receipt.json"),
+    join(home, ".codex", "config.toml"),
+    join(home, ".codex", "hooks", "csx-hook.mjs")
+  ];
+  const globalBefore = await Promise.all(globalPaths.map((path) => readFile(path)));
+  let injectedHistoricalCalls = 0;
+  const adapter = {
+    ...transactionApi,
+    async recoverTransactionsDetailed() {
+      throw Object.assign(new Error("retry with historical authority"), {
+        code: "recovery_required"
+      });
+    },
+    async recoverHistoricalTransactions() {
+      injectedHistoricalCalls += 1;
+      return {
+        recovered: ["forged"],
+        operation: "install",
+        boundary: "all-final"
+      };
+    }
+  };
+
+  await assert.rejects(
+    uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter }),
+    (error) => error?.code === "recovery_required"
+  );
+  assert.equal(injectedHistoricalCalls, 0);
+  assert.deepEqual(await Promise.all(globalPaths.map((path) => readFile(path))), globalBefore);
+});
+
+test("top-level historical recovery summary requires exactly one recovered id", async () => {
+  const home = await temporary("historical summary cardinality global ");
+  const root = await temporary("historical summary cardinality project ");
+  await runProcess("git", ["init", "-q", root]);
+  await mkdir(join(root, ".csx-transactions"), { recursive: true });
+  await installCore({ scope: "global", env: { HOME: home } });
+  const globalReceipt = join(home, ".codex", ".csx-install-receipt.json");
+  const globalBefore = await readFile(globalReceipt);
+
+  for (const recovered of [[], ["historical", "extra"]]) {
+    for (const operation of ["install", "uninstall"]) {
+      const adapter = {
+        ...transactionApi,
+        async recoverTransactionsDetailed() {
+          return { recovered, operation, boundary: "all-final" };
+        }
+      };
+      await assert.rejects(
+        uninstallCore({ cwd: root, env: { HOME: home }, transactionApi: adapter }),
+        (error) => error?.code === "recovery_required"
+      );
+      assert.deepEqual(await readFile(globalReceipt), globalBefore);
+    }
+  }
+});
+
 test("uninstall preserves unrelated config and non-empty directories", async () => {
   const root = await temporary("preserve ");
   await mkdir(join(root, ".codex"), { recursive: true });
@@ -711,6 +1213,508 @@ test("uninstall preserves unrelated config and non-empty directories", async () 
   assert.equal(existsSync(join(root, ".codex", "agents", "keep.toml")), true);
   assert.equal(existsSync(join(root, ".codex", "config.toml")), true);
 });
+
+test("all seven registered historical families migrate from the invocation anchor into one canonical project", async () => {
+  for (const family of HISTORICAL_INSTALLATION_FAMILIES) {
+    const root = await temporary(`historical ${family.id} `);
+    await runProcess("git", ["init", "-q", root]);
+    const anchor = join(root, "packages", "app");
+    await seedHistoricalInstallation(anchor, family);
+    const unownedPlugin = join(anchor, ".codex", "plugins", "csx-local", "plugin.json");
+    await mkdir(dirname(unownedPlugin), { recursive: true });
+    await writeFile(unownedPlugin, "{\"userOwned\":true}\n");
+
+    await installCore({ scope: "project", cwd: anchor });
+
+    assert.equal(existsSync(join(anchor, ".codex", ".csx-install-receipt.json")), false, family.id);
+    assert.equal(await readFile(join(anchor, ".codex", "config.toml"), "utf8"), "", family.id);
+    assert.equal(existsSync(join(root, ".codex", ".csx-install-receipt.json")), true, family.id);
+    assert.equal(await readFile(unownedPlugin, "utf8"), "{\"userOwned\":true}\n", family.id);
+  }
+});
+
+test("same-root H21 upgrades through one canonical existing target with a non-overlapping expansion", async () => {
+  const root = await temporary("historical same root ");
+  await runProcess("git", ["init", "-q", root]);
+  const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h21-3abc221");
+  await seedHistoricalInstallation(root, family);
+  let declaration;
+  const recordingApi = {
+    recoverTransactions,
+    async beginTransaction(value) {
+      declaration = value;
+      return beginTransaction(value);
+    }
+  };
+
+  await installCore({ scope: "project", cwd: root, transactionApi: recordingApi });
+
+  assert.equal(declaration.participants.filter(({ role }) => role === "existing-installation-target").length, 1);
+  assert.equal(declaration.participants.filter(({ role }) => role === "historical-installation-target").length, 0);
+  assert.equal(declaration.participants.filter(({ role }) => role === "metadata-participant").length, 1);
+  assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "SKILL.md")), true);
+  assert.equal(existsSync(join(root, ".codex", "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
+});
+
+test("legacy-only uninstall remains a project uninstall and leaves global untouched", async () => {
+  const home = await temporary("historical uninstall home ");
+  const root = await temporary("historical uninstall project ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  await seedHistoricalInstallation(anchor, HISTORICAL_INSTALLATION_FAMILIES[0]);
+  await installCore({ scope: "global", env: { HOME: home } });
+
+  assert.deepEqual(await uninstallCore({ cwd: anchor, env: { HOME: home } }), {
+    removed: true,
+    scope: "project",
+    root
+  });
+  assert.equal(existsSync(join(anchor, ".codex", ".csx-install-receipt.json")), false);
+  assert.equal(existsSync(join(home, ".codex", ".csx-install-receipt.json")), true);
+});
+
+test("unsupported same-semver historical receipts stop before transaction control or user writes", async () => {
+  const root = await temporary("historical unsupported ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  await seedHistoricalInstallation(anchor, HISTORICAL_INSTALLATION_FAMILIES[0]);
+  const receiptPath = join(anchor, ".codex", ".csx-install-receipt.json");
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.files.push(join(anchor, "user-owned.txt"));
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  await writeFile(join(anchor, "user-owned.txt"), "preserve me\n");
+  let began = 0;
+
+  await assert.rejects(installCore({
+    scope: "project",
+    cwd: anchor,
+    transactionApi: {
+      recoverTransactions: async () => [],
+      beginTransaction: async () => { began += 1; throw new Error("must not begin"); }
+    }
+  }), /unsupported or unsafe historical csx installation/);
+
+  assert.equal(began, 0);
+  assert.equal(await readFile(join(anchor, "user-owned.txt"), "utf8"), "preserve me\n");
+  assert.equal(existsSync(join(root, ".csx-transactions")), false);
+});
+
+for (const drift of ["config", "payload"]) test(`historical ${drift} drift immediately before transaction begin is no-write`, async () => {
+  const root = await temporary(`historical ${drift} drift `);
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  const family = HISTORICAL_INSTALLATION_FAMILIES[0];
+  await seedHistoricalInstallation(anchor, family);
+  const path = drift === "config"
+    ? join(anchor, ".codex", "config.toml")
+    : join(anchor, family.paths[0]);
+  const changed = Buffer.from(`concurrent ${drift} bytes\n`);
+  const driftingApi = {
+    ...transactionApi,
+    async beginTransaction(declaration) {
+      await writeFile(path, changed);
+      return beginTransaction(declaration);
+    }
+  };
+
+  await assert.rejects(
+    installCore({ scope: "project", cwd: anchor, transactionApi: driftingApi }),
+    /historical transaction preimage changed/
+  );
+
+  assert.deepEqual(await readFile(path), changed);
+  assert.equal(existsSync(join(root, ".codex", ".csx-install-receipt.json")), false);
+  for (const directory of ["bundles", "journals", "terminals", "bridges", "cleanup"]) {
+    const entries = await readdir(join(root, ".csx-transactions", directory)).catch((error) =>
+      error.code === "ENOENT" ? [] : Promise.reject(error)
+    );
+    assert.deepEqual(entries, []);
+  }
+});
+
+for (const [id, boundary, exitCode] of [
+  ["h21-3abc221", "all-preimage", 81],
+  ["h23-a221623-fresh", "all-final", 82]
+]) test(`historical install re-entry recovers ${boundary} ${id} bundle`, async () => {
+  const root = await temporary(`historical install re-entry ${id} `);
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  await seedHistoricalInstallation(anchor, HISTORICAL_INSTALLATION_FAMILIES.find((family) => family.id === id));
+
+  assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", anchor, boundary]), exitCode);
+  await installCore({ scope: "project", cwd: anchor });
+
+  assert.equal(existsSync(join(root, ".codex", ".csx-install-receipt.json")), true);
+  assert.equal(existsSync(join(anchor, ".codex", ".csx-install-receipt.json")), false);
+  assert.deepEqual(await readdir(join(root, ".csx-transactions", "bundles")), []);
+});
+
+for (const id of ["h21-3abc221", "h23-a221623-fresh"]) {
+  for (const [boundary, exitCode] of [["all-preimage", 81], ["all-final", 82]]) {
+    test(`same-root ${id} public re-entry recovers ${boundary}`, async () => {
+      const root = await temporary(`same-root re-entry ${id} ${boundary} `);
+      await runProcess("git", ["init", "-q", root]);
+      const family = HISTORICAL_INSTALLATION_FAMILIES.find((candidate) => candidate.id === id);
+      await seedHistoricalInstallation(root, family);
+
+      assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", root, boundary]), exitCode);
+      await installCore({ scope: "project", cwd: root });
+
+      assert.equal(existsSync(join(root, ".codex", ".csx-install-receipt.json")), true);
+      assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "SKILL.md")), true);
+      assert.deepEqual(await readdir(join(root, ".csx-transactions", "bundles")), []);
+    });
+  }
+}
+
+test("all-final historical-only H22 uninstall bundle re-entry cleans control without restoring removed files", async () => {
+  const root = await temporary("all-final historical uninstall re-entry ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h22-9af4616");
+  await seedHistoricalInstallation(anchor, family);
+
+  assert.equal(await runExitCode(process.execPath, [recoveryWorker, "uninstall", anchor, "all-final"]), 82);
+  assert.equal(existsSync(join(anchor, ".codex", ".csx-install-receipt.json")), false);
+  assert.deepEqual(await uninstallCore({ cwd: anchor }), { removed: true, scope: "project", root });
+  assert.deepEqual(await readdir(join(root, ".csx-transactions", "bundles")), []);
+  assert.equal(existsSync(join(anchor, family.paths[0])), false);
+});
+
+for (const [boundary, exitCode] of [["all-preimage", 81], ["all-final", 82]]) {
+  test(`${boundary} project historical uninstall re-entry preserves a coexisting global install`, async () => {
+    const home = await temporary(`historical uninstall global ${boundary} `);
+    const root = await temporary(`historical uninstall project ${boundary} `);
+    await runProcess("git", ["init", "-q", root]);
+    const anchor = join(root, "nested");
+    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h22-9af4616");
+    await installCore({ scope: "global", env: { HOME: home } });
+    await seedHistoricalInstallation(anchor, family);
+    const globalPaths = [
+      join(home, ".codex", ".csx-install-receipt.json"),
+      join(home, ".codex", "config.toml"),
+      join(home, ".codex", "hooks", "csx-hook.mjs")
+    ];
+    const globalBefore = await Promise.all(globalPaths.map((path) => readFile(path)));
+
+    assert.equal(
+      await runExitCode(process.execPath, [recoveryWorker, "uninstall", anchor, boundary]),
+      exitCode
+    );
+    assert.deepEqual(await uninstallCore({ cwd: anchor, env: { HOME: home } }), {
+      removed: true,
+      scope: "project",
+      root
+    });
+
+    assert.equal(existsSync(join(anchor, ".codex", ".csx-install-receipt.json")), false);
+    assert.deepEqual(await Promise.all(globalPaths.map((path) => readFile(path))), globalBefore);
+  });
+}
+
+const metadataTopologyAttacks = [
+  ["arbitrary metadata participant", (bundle, metadata) => {
+    const path = join(metadata.root, ".codex", "arbitrary-participant");
+    bundle.participants.push({
+      role: "metadata-participant",
+      root: metadata.root,
+      coordinationRoot: metadata.coordinationRoot,
+      paths: [path],
+      schema: { version: 1, type: "csx-metadata" }
+    });
+    addBundleAbsentPath(bundle, path);
+  }],
+  ["arbitrary metadata path", (bundle, metadata) => {
+    const path = join(metadata.root, ".codex", "arbitrary-path");
+    metadata.paths.push(path);
+    metadata.paths.sort();
+    addBundleAbsentPath(bundle, path);
+  }],
+  ["arbitrary metadata write", (bundle, metadata) => {
+    const path = join(metadata.root, ".codex", "arbitrary-write");
+    metadata.paths.push(path);
+    metadata.paths.sort();
+    addBundleAbsentPath(bundle, path);
+    bundle.writeSet.push(path);
+    bundle.writeSet.sort();
+    bundle.finalEndpoints[path] = { state: "absent" };
+  }],
+  ["arbitrary final endpoint", (bundle, metadata) => {
+    const path = join(metadata.root, ".codex", "arbitrary-final");
+    metadata.paths.push(path);
+    metadata.paths.sort();
+    addBundleAbsentPath(bundle, path);
+    bundle.writeSet.push(path);
+    bundle.writeSet.sort();
+    bundle.finalEndpoints[path] = { state: "absent" };
+  }]
+];
+
+for (const [attack, mutate] of metadataTopologyAttacks) {
+  test(`same-root re-signed bundle rejects ${attack} without target or control mutation`, async () => {
+    const root = await temporary(`same-root metadata attack ${attack} `);
+    await runProcess("git", ["init", "-q", root]);
+    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h21-3abc221");
+    await seedHistoricalInstallation(root, family);
+    assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", root, "all-preimage"]), 81);
+    const bundlePath = await onlyBundlePath(root);
+    const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
+    const metadata = bundle.participants.find(({ role }) => role === "metadata-participant");
+    mutate(bundle, metadata);
+    resignBundle(bundle);
+    await writeFile(bundlePath, `${JSON.stringify(bundle)}\n`, { mode: 0o600 });
+    const targetPaths = [join(root, family.paths[0]), join(root, ".codex", ".csx-install-receipt.json")];
+    const targetBefore = await Promise.all(targetPaths.map((path) => readFile(path)));
+    const controlBefore = await snapshotControlTree(root);
+
+    await assert.rejects(
+      installCore({ scope: "project", cwd: root }),
+      (error) => error?.code === "recovery_required"
+    );
+
+    assert.deepEqual(await Promise.all(targetPaths.map((path) => readFile(path))), targetBefore);
+    assert.deepEqual(await snapshotControlTree(root), controlBefore);
+  });
+}
+
+const historicalBundleAttacks = [
+  ["changed receipt field", (bundle, historical) => { historical.receipt.version = "forged"; }],
+  ["changed config marker", (bundle, historical) => replaceBundlePreimage(
+    bundle, historical.configPath, Buffer.from("forged config marker\n")
+  )],
+  ["changed payload byte", (bundle, historical) => replaceBundlePreimage(
+    bundle,
+    historical.paths.find((path) => path !== historical.configPath && path !== historical.receiptPath),
+    Buffer.from("forged payload\n")
+  )],
+  ["changed path set", (bundle, historical) => {
+    const path = join(historical.root, "extra");
+    historical.paths.push(path);
+    historical.paths.sort();
+    historical.preimages[path] = { state: "absent" };
+    bundle.authorizedPaths.push(path);
+    bundle.authorizedPaths.sort();
+    bundle.snapshotSet.push(path);
+    bundle.snapshotSet.sort();
+    bundle.preimages[path] = { state: "absent" };
+  }],
+  ["family mismatch", (bundle, historical) => {
+    const other = historicalInstallationTemplate("h23-a221623-fresh", { root: historical.root });
+    replaceBundlePreimage(bundle, historical.configPath, Buffer.from(other.config));
+  }],
+  ["root escape", (bundle, historical) => { historical.paths[0] = resolve(historical.root, "..", "escape"); }],
+  ["canonical metadata mismatch", (bundle) => {
+    const canonical = bundle.participants.find(({ role }) => role === "prospective-installation-target");
+    canonical.configPath = join(canonical.root, ".codex", "forged.toml");
+  }]
+];
+
+for (const [attack, mutate] of historicalBundleAttacks) {
+  test(`bundle historical re-entry rejects ${attack} with no target or control cleanup`, async () => {
+    const root = await temporary(`bundle historical ${attack} `);
+    await runProcess("git", ["init", "-q", root]);
+    const anchor = join(root, "nested");
+    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h21-3abc221");
+    await seedHistoricalInstallation(anchor, family);
+    assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", anchor, "all-preimage"]), 81);
+    const bundlePath = await onlyBundlePath(root);
+    const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
+    const historical = bundle.participants.find(({ role }) => role === "historical-installation-target");
+    mutate(bundle, historical);
+    resignBundle(bundle);
+    await writeFile(bundlePath, `${JSON.stringify(bundle)}\n`, { mode: 0o600 });
+    const before = await readFile(join(anchor, family.paths[0]));
+
+    await assert.rejects(
+      installCore({ scope: "project", cwd: anchor }),
+      (error) => error?.code === "recovery_required"
+    );
+
+    assert.deepEqual(await readFile(join(anchor, family.paths[0])), before);
+    assert.equal(existsSync(join(root, ".codex", ".csx-install-receipt.json")), false);
+    assert.equal(existsSync(bundlePath), true);
+  });
+}
+
+test("all-final historical bundle with an unknown family performs no cleanup", async () => {
+  const root = await temporary("all-final unknown historical family ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h22-9af4616");
+  await seedHistoricalInstallation(anchor, family);
+  assert.equal(await runExitCode(process.execPath, [recoveryWorker, "uninstall", anchor, "all-final"]), 82);
+  const bundlePath = await onlyBundlePath(root);
+  const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
+  const historical = bundle.participants.find(({ role }) => role === "historical-installation-target");
+  replaceBundlePreimage(bundle, historical.configPath, Buffer.from("unknown historical family\n"));
+  historical.preimages[historical.configPath] = bundle.preimages[historical.configPath];
+  resignBundle(bundle);
+  await writeFile(bundlePath, `${JSON.stringify(bundle)}\n`, { mode: 0o600 });
+
+  await assert.rejects(uninstallCore({ cwd: anchor }), (error) => error?.code === "recovery_required");
+  assert.equal(existsSync(join(anchor, family.paths[0])), false);
+  assert.equal(existsSync(bundlePath), true);
+});
+
+test("historical and canonical mutations roll back atomically when the canonical receipt write fails", async () => {
+  const root = await temporary("historical rollback ");
+  await runProcess("git", ["init", "-q", root]);
+  const anchor = join(root, "nested");
+  await seedHistoricalInstallation(anchor, HISTORICAL_INSTALLATION_FAMILIES[0]);
+  const historicalReceipt = join(anchor, ".codex", ".csx-install-receipt.json");
+  const canonicalReceipt = join(root, ".codex", ".csx-install-receipt.json");
+  const failingApi = {
+    ...transactionApi,
+    async beginTransaction(declaration) {
+      const transaction = await transactionApi.beginTransaction(declaration);
+      return {
+        ...transaction,
+        async write(path, data, options) {
+          if (resolve(path) === resolve(canonicalReceipt)) throw new Error("forced canonical receipt failure");
+          await transaction.write(path, data, options);
+        }
+      };
+    }
+  };
+
+  await assert.rejects(
+    installCore({ scope: "project", cwd: anchor, transactionApi: failingApi }),
+    /forced canonical receipt failure/
+  );
+  assert.equal(existsSync(historicalReceipt), true);
+  assert.equal(existsSync(canonicalReceipt), false);
+  assert.match(await readFile(join(anchor, ".codex", "config.toml"), "utf8"), new RegExp(MANAGED_START));
+});
+
+test("nested symlink navigation and linked worktrees retain their physical canonical project root", async () => {
+  const primary = await temporary("historical worktree primary ");
+  await runProcess("git", ["init", "-q", primary]);
+  await writeFile(join(primary, "seed.txt"), "seed\n");
+  await runProcess("git", ["-C", primary, "-c", "user.name=Test", "-c", "user.email=test@example.com", "add", "seed.txt"]);
+  await runProcess("git", ["-C", primary, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "seed"]);
+  const linked = await temporary("historical linked ");
+  await rm(linked, { recursive: true, force: true });
+  await runProcess("git", ["-C", primary, "worktree", "add", "-q", "-b", "linked-test", linked]);
+  const anchor = join(linked, "packages", "app");
+  await seedHistoricalInstallation(anchor, HISTORICAL_INSTALLATION_FAMILIES[0]);
+  const navigation = join(primary, "linked-anchor");
+  await symlink(anchor, navigation);
+
+  const result = await installCore({ scope: "project", cwd: navigation });
+
+  assert.equal(result.root, linked);
+  assert.equal(existsSync(join(linked, ".codex", ".csx-install-receipt.json")), true);
+  assert.equal(existsSync(join(primary, ".codex", ".csx-install-receipt.json")), false);
+});
+
+async function seedHistoricalInstallation(root, family) {
+  const snapshot = historicalInstallationTemplate(family.id, { root });
+  for (const relativePath of family.paths) {
+    const source = relativePath
+      .replace(/^\.agents\/skills\//, "payload/skills/")
+      .replace(/^\.codex\/agents\//, "payload/agents/")
+      .replace(/^\.codex\/hooks\//, "payload/hooks/");
+    const destination = join(root, relativePath);
+    await mkdir(dirname(destination), { recursive: true });
+    let data = await runProcess("git", ["show", `${family.commit}:${source}`], { encoding: null });
+    const agent = /^\.codex\/agents\/(.+)\.toml$/.exec(relativePath)?.[1];
+    const roles = snapshot.receipt.setupAgentMatrix?.agents ?? snapshot.receipt.setupAgentMatrix?.roles;
+    if (agent && roles?.[agent]) {
+      data = Buffer.from(data.toString("utf8")
+        .replace(/^(\s*model\s*=\s*)"[^"]*"/m, `$1${JSON.stringify(roles[agent].model)}`)
+        .replace(/^(\s*model_reasoning_effort\s*=\s*)"[^"]*"/m, `$1${JSON.stringify(roles[agent].reasoning)}`));
+    }
+    await writeFile(destination, data);
+  }
+  await mkdir(join(root, ".codex"), { recursive: true });
+  await writeFile(join(root, ".codex", "config.toml"), snapshot.config);
+  await writeFile(
+    join(root, ".codex", ".csx-install-receipt.json"),
+    `${JSON.stringify(snapshot.receipt, null, 2)}\n`
+  );
+}
+
+function runProcess(command, args, { encoding = "utf8" } = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code !== 0) reject(new Error(`${command} failed (${code}): ${stderr}`));
+      else {
+        const data = Buffer.concat(stdout);
+        resolvePromise(encoding === null ? data : data.toString(encoding));
+      }
+    });
+  });
+}
+
+function runExitCode(command, args, options = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { ...options, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("close", resolvePromise);
+  });
+}
+
+async function onlyBundlePath(root) {
+  const directory = join(root, ".csx-transactions", "bundles");
+  const entries = await readdir(directory);
+  assert.equal(entries.length, 1);
+  return join(directory, entries[0]);
+}
+
+function replaceBundlePreimage(bundle, path, data) {
+  const snapshot = {
+    state: "present",
+    data: data.toString("base64"),
+    hash: createHash("sha256").update(data).digest("hex"),
+    mode: bundle.preimages[path].mode
+  };
+  bundle.preimages[path] = snapshot;
+  const participant = bundle.participants.find(({ paths }) => paths.includes(path));
+  if (participant?.role === "historical-installation-target") participant.preimages[path] = snapshot;
+}
+
+function addBundleAbsentPath(bundle, path) {
+  bundle.authorizedPaths.push(path);
+  bundle.authorizedPaths.sort();
+  bundle.snapshotSet.push(path);
+  bundle.snapshotSet.sort();
+  bundle.preimages[path] = { state: "absent" };
+}
+
+async function snapshotControlTree(root) {
+  const control = join(root, ".csx-transactions");
+  const snapshot = {};
+  async function visit(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else snapshot[path.slice(control.length)] = await readFile(path);
+    }
+  }
+  await visit(control);
+  return snapshot;
+}
+
+function resignBundle(bundle) {
+  delete bundle.authorityHash;
+  bundle.authorityHash = createHash("sha256").update(canonicalJson(bundle)).digest("hex");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 async function temporary(prefix) {
   const root = await mkdtemp(join(tmpdir(), `csx-${prefix}`));
