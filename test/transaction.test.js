@@ -5,6 +5,7 @@ import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile }
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
+import { existingInstallationTarget } from "../lib/installation-state.js";
 import { Transaction, __setTransactionTestHooks, beginTransaction, preflightTransaction, recoverTransactions, recoveryAuthorityFromDeclaration } from "../lib/transaction.js";
 import { controlPath } from "../lib/transaction-lock.js";
 
@@ -91,6 +92,19 @@ async function beginCrossRootTransaction() {
     writeSet: [target, metadataPath]
   });
   return { root, metadataRoot, target, metadataPath, transaction };
+}
+async function existingUpgrade(additionNames = ["added.txt"]) {
+  const root = await temporary();
+  const configPath = join(root, "config.toml");
+  const receiptPath = join(root, ".csx-install-receipt.json");
+  const managed = join(root, "managed.txt");
+  const additions = additionNames.map((name) => join(root, name));
+  const receipt = { root, files: [managed] };
+  await writeFile(configPath, "managed = true\n", { mode: 0o600 });
+  await writeFile(managed, "original\n", { mode: 0o640 });
+  await writeFile(receiptPath, JSON.stringify(receipt), { mode: 0o600 });
+  const participant = await existingInstallationTarget({ root, configPath, receiptPath, expectedFiles: [managed], additions });
+  return { root, configPath, receiptPath, managed, additions, participant };
 }
 
 test("recovery refuses forged peer descriptors without creating the peer control store", async () => {
@@ -318,6 +332,192 @@ test("transaction declaration rejects receipt snapshots that drift from the lock
     }),
     /receipt snapshot|preimage|authority/
   );
+});
+test("existing upgrade additions are exact absent authority and recover to their locked absent preimage", async () => {
+  const { root, additions: [addition], participant } = await existingUpgrade();
+  assert.equal(Object.isFrozen(participant.additions), true);
+  assert.deepEqual(participant.additions, [addition]);
+  assert.equal(participant.receipt.files.includes(addition), false);
+  assert.equal(participant.paths.includes(addition), true);
+
+  const transaction = await beginTransaction({
+    operation: "install",
+    participants: [participant],
+    snapshotSet: participant.paths,
+    writeSet: [addition]
+  });
+  assert.deepEqual(transaction.manifest.participants[0].additions, [addition]);
+  assert.deepEqual(transaction.manifest.snapshots[addition], { state: "absent" });
+  assert.deepEqual(recoveryAuthority(transaction).participants[0].additions, [addition]);
+  const exactPathAuthority = recoveryAuthorityFromDeclaration({
+    coordinationRoots: transaction.manifest.roots.map(({ root: coordinationRoot }) => coordinationRoot),
+    participants: [{
+      role: "prospective-installation-target",
+      root: participant.root,
+      coordinationRoot: participant.coordinationRoot ?? participant.root,
+      configPath: participant.configPath,
+      receiptPath: participant.receiptPath,
+      paths: participant.paths,
+      preimages: Object.fromEntries(participant.paths.map((path) => [path, { state: "absent" }])),
+      expectedFiles: participant.receipt.files,
+      additions: participant.additions
+    }],
+    snapshotSet: participant.paths
+  });
+  assert.deepEqual(exactPathAuthority.participants[0].expectedFiles, participant.receipt.files);
+  assert.deepEqual(exactPathAuthority.participants[0].additions, participant.additions);
+  assert.equal(Object.isFrozen(exactPathAuthority.participants[0].expectedFiles), true);
+  assert.equal(Object.isFrozen(exactPathAuthority.participants[0].additions), true);
+
+  await transaction.write(addition, "partial upgrade\n", { mode: 0o600 });
+  await transaction.close();
+  assert.equal(await readFile(addition, "utf8"), "partial upgrade\n");
+  assert.deepEqual(await recoverTransactions(root, exactPathAuthority), [transaction.id]);
+  assert.equal(await readFile(addition).catch((error) => error.code), "ENOENT");
+});
+test("existing installation target rejects malformed, escaping, overlapping, and present additions", async () => {
+  const { root, configPath, receiptPath, managed, additions: [addition] } = await existingUpgrade();
+  const declaration = { root, configPath, receiptPath, expectedFiles: [managed] };
+
+  await assert.rejects(existingInstallationTarget({ ...declaration, additions: "not-an-array" }), /additions must be an array/);
+  await assert.rejects(existingInstallationTarget({ ...declaration, additions: [join(root, "..", "escape.txt")] }), /escapes installation root/);
+  await assert.rejects(existingInstallationTarget({ ...declaration, additions: [addition, addition] }), /additions must be unique/);
+  await assert.rejects(existingInstallationTarget({ ...declaration, additions: [managed] }), /overlaps an owned path/);
+  await writeFile(addition, "collision\n");
+  await assert.rejects(existingInstallationTarget({ ...declaration, additions: [addition] }), /addition must be absent/);
+});
+test("existing upgrade declaration rejects additions and snapshot or write authority mismatches", async () => {
+  const { root, managed, additions: [addition], participant } = await existingUpgrade(["added.txt"]);
+  const other = join(root, "other.txt");
+  const declaration = (candidate, snapshotSet = candidate.paths, writeSet = [addition]) => ({
+    operation: "install",
+    participants: [candidate],
+    snapshotSet,
+    writeSet
+  });
+
+  await assert.rejects(beginTransaction(declaration({ ...participant, additions: [addition, addition] })), /additions must be unique/);
+  await assert.rejects(beginTransaction(declaration({ ...participant, additions: [managed], paths: participant.paths })), /overlaps receipt ownership|paths do not exactly match/);
+  await assert.rejects(beginTransaction(declaration({ ...participant, paths: participant.paths.filter((path) => path !== addition) })), /paths do not exactly match/);
+  await assert.rejects(beginTransaction(declaration({ ...participant, additions: [addition, other] })), /paths do not exactly match/);
+  await assert.rejects(beginTransaction(declaration(participant, participant.paths.filter((path) => path !== addition), [])), /snapshotSet must exactly cover/);
+  await assert.rejects(beginTransaction(declaration(participant, participant.paths, [])), /additions must be included in writeSet/);
+});
+test("existing upgrade rechecks addition absence after acquiring the transaction lock", async () => {
+  const { additions: [addition], participant } = await existingUpgrade();
+  await withTransactionTestHooks({
+    beforeManifest: async () => writeFile(addition, "raced\n")
+  }, async () => {
+    await assert.rejects(beginTransaction({
+      operation: "install",
+      participants: [participant],
+      snapshotSet: participant.paths,
+      writeSet: [addition]
+    }), /addition became present while locked/);
+  });
+  assert.equal(await readFile(addition, "utf8"), "raced\n");
+});
+test("existing upgrade recovery rejects mismatched caller and manifest additions", async () => {
+  const { root, additions: [addition], participant } = await existingUpgrade();
+  const transaction = await beginTransaction({
+    operation: "install",
+    participants: [participant],
+    snapshotSet: participant.paths,
+    writeSet: [addition]
+  });
+  await transaction.write(addition, "partial\n", { mode: 0o600 });
+  await transaction.close();
+
+  const legacyParticipant = { ...participant, paths: participant.paths.filter((path) => path !== addition) };
+  delete legacyParticipant.additions;
+  const mismatchedAuthority = recoveryAuthorityFromDeclaration({
+    coordinationRoots: transaction.manifest.roots.map(({ root: coordinationRoot }) => coordinationRoot),
+    participants: [legacyParticipant],
+    snapshotSet: legacyParticipant.paths
+  });
+  await assert.rejects(recoverTransactions(root, mismatchedAuthority), /does not exactly match caller authority|exceed caller authority/);
+  const unionPaths = [...participant.paths, join(root, "other-variant.txt")].sort();
+  const unionAuthority = recoveryAuthorityFromDeclaration({
+    coordinationRoots: transaction.manifest.roots.map(({ root: coordinationRoot }) => coordinationRoot),
+    participants: [{
+      role: "prospective-installation-target",
+      root,
+      configPath: participant.configPath,
+      receiptPath: participant.receiptPath,
+      paths: unionPaths,
+      preimages: Object.fromEntries(unionPaths.map((path) => [path, { state: "absent" }]))
+    }],
+    snapshotSet: unionPaths
+  });
+  await assert.rejects(recoverTransactions(root, unionAuthority), /does not exactly match caller authority/);
+
+  const manifestPath = join(controlPath(root), "journals", `${transaction.id}.json`);
+  const forged = JSON.parse(await readFile(manifestPath, "utf8"));
+  forged.participants[0].additions = [];
+  await writeFile(manifestPath, `${JSON.stringify(forged)}\n`, { mode: 0o600 });
+  await assert.rejects(recoverTransactions(root, recoveryAuthority(transaction)), /manifest authorization is invalid|paths do not exactly match/);
+  assert.equal(await readFile(addition, "utf8"), "partial\n");
+});
+test("prospective recovery requires an exact receipt-owned and additions split for an existing manifest", async () => {
+  const { root, managed, additions: [addition], participant } = await existingUpgrade();
+  const transaction = await beginTransaction({
+    operation: "install",
+    participants: [participant],
+    snapshotSet: participant.paths,
+    writeSet: [addition]
+  });
+  await transaction.write(addition, "partial\n", { mode: 0o600 });
+  await transaction.close();
+  const manifestPath = join(controlPath(root), "journals", `${transaction.id}.json`);
+  const manifestBefore = await readFile(manifestPath, "utf8");
+  const candidate = (expectedFiles, additions, includeSplit = true) => recoveryAuthorityFromDeclaration({
+    coordinationRoots: transaction.manifest.roots.map(({ root: coordinationRoot }) => coordinationRoot),
+    participants: [{
+      role: "prospective-installation-target",
+      root,
+      configPath: participant.configPath,
+      receiptPath: participant.receiptPath,
+      paths: participant.paths,
+      preimages: Object.fromEntries(participant.paths.map((path) => [path, { state: "absent" }])),
+      ...(includeSplit ? { expectedFiles, additions } : {})
+    }],
+    snapshotSet: participant.paths
+  });
+
+  await assert.rejects(recoverTransactions(root, candidate([], [], false)), /does not exactly match caller authority/);
+  await assert.rejects(recoverTransactions(root, candidate([managed, addition], [])), /does not exactly match caller authority/);
+  assert.equal(await readFile(manifestPath, "utf8"), manifestBefore);
+  assert.equal(await readFile(addition, "utf8"), "partial\n");
+
+  assert.deepEqual(await recoverTransactions(root, candidate([managed], [addition])), [transaction.id]);
+  assert.equal(await readFile(addition).catch((error) => error.code), "ENOENT");
+});
+test("legacy existing participant without additions normalizes to empty authority only", async () => {
+  const { root, managed, participant } = await existingUpgrade([]);
+  const legacyParticipant = { ...participant };
+  delete legacyParticipant.additions;
+  const authority = recoveryAuthorityFromDeclaration({ participants: [legacyParticipant], snapshotSet: legacyParticipant.paths });
+  assert.deepEqual(authority.participants[0].additions, []);
+  await assert.rejects(
+    async () => recoveryAuthorityFromDeclaration({ participants: [legacyParticipant], snapshotSet: [...legacyParticipant.paths, join(root, "unauthorized.txt")] }),
+    /recovery authority paths are invalid/
+  );
+
+  const transaction = await beginTransaction({
+    operation: "setup",
+    participants: [legacyParticipant],
+    snapshotSet: legacyParticipant.paths,
+    writeSet: [managed]
+  });
+  await transaction.write(managed, "changed\n", { mode: 0o640 });
+  await transaction.close();
+  const manifestPath = join(controlPath(root), "journals", `${transaction.id}.json`);
+  const legacyManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  delete legacyManifest.participants[0].additions;
+  await writeFile(manifestPath, `${JSON.stringify(legacyManifest)}\n`, { mode: 0o600 });
+
+  assert.deepEqual(await recoverTransactions(root, authority), [transaction.id]);
+  assert.equal(await readFile(managed, "utf8"), "original\n");
 });
 test("normal cross-root commit and rollback remove every transaction control record", async () => {
   for (const outcome of ["commit", "rollback"]) {

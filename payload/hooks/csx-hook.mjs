@@ -3,6 +3,7 @@
 const SKILL_HINTS = {
   analyze: "read-only repository analysis with file-backed evidence and confidence labels",
   spec: "evidence-grounded requirements clarification with readiness, scope, constraints, acceptance criteria, non-goals, and decision boundaries",
+  loop: "explicit bounded orchestration through specification, planning, goal execution, and completion",
   plan: "concise implementation plan with verification and risk checks",
   "plan-pro": "higher-rigor plan with bounded architect and critic review",
   "start-goal": "durable task execution with success criteria and evidence",
@@ -32,11 +33,18 @@ function detectCsxSkill(prompt) {
   if (typeof prompt !== "string") return null;
 
   const match = prompt.match(
-    /^\s*(?:\$csx-(analyze|spec|plan-pro|plan|start-goal|deslop|code-review)|csx\s+(analyze|spec|plan-pro|plan|start-goal|deslop|code-review))\b/i,
+    /^\s*(?:\$csx-(analyze|spec|loop|plan-pro|plan|start-goal|deslop|code-review)|csx\s+(analyze|spec|loop|plan-pro|plan|start-goal|deslop|code-review))\b/i,
   );
   if (!match) return null;
 
   const skill = (match[1] || match[2]).toLowerCase();
+  if (skill === "loop") {
+    const invocation = prompt.match(/^\s*(?:\$csx-loop|csx\s+loop)\b([\s\S]*)$/i);
+    const request = invocation[1].trim();
+    if (!request) return null;
+    if (/^resume(?:\s|$)/i.test(request) && !/^resume\s+\S+$/i.test(request)) return null;
+  }
+
   return Object.hasOwn(SKILL_HINTS, skill) ? skill : null;
 }
 

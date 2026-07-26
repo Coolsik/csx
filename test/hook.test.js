@@ -20,9 +20,28 @@ test("hook routes direct and shorthand csx skill prompts", async () => {
   }
 });
 
+test("hook routes explicit loop requests and resume prompts", async () => {
+  for (const prompt of [
+    "$csx-loop implement the bounded request",
+    "csx loop implement the bounded request",
+    "$csx-loop resume bounded-request",
+    "csx loop resume bounded-request",
+  ]) {
+    const output = await runHook({ hook_event_name: "UserPromptSubmit", prompt });
+    const parsed = JSON.parse(output);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /Use the \$csx-loop skill/);
+  }
+});
+
 test("hook ignores ordinary, unknown, and invalid prompts", async () => {
   assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "please plan this" }), "");
+  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "please loop this" }), "");
   assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "csx unknown" }), "");
+  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "$csx-looping request" }), "");
+  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "csx loopy request" }), "");
+  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "$csx-loop" }), "");
+  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "csx loop resume" }), "");
+  assert.equal(await runHook({ hook_event_name: "UserPromptSubmit", prompt: "$csx-loop resume bounded-request extra" }), "");
   assert.equal(await runRaw("{not json"), "");
 });
 

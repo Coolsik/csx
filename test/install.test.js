@@ -17,6 +17,11 @@ import {
   windowsCommand
 } from "../lib/install.js";
 import { AGENT_NAMES, LEGACY_VERIFIER_NAME, presetMatrix } from "../lib/presets.js";
+import {
+  __setTransactionTestHooks,
+  beginTransaction as beginRealTransaction,
+  recoverTransactions as recoverRealTransactions
+} from "../lib/transaction.js";
 
 const roots = [];
 
@@ -72,6 +77,11 @@ test("global install applies Balanced Leader while preserving the original for u
     .then((text) => text.includes("name: csx-plan")), true);
   assert.equal(existsSync(join(codex, "skills", "csx-deslop", "SKILL.md")), true);
   assert.equal(existsSync(join(codex, "skills", "csx-deslop", "agents", "openai.yaml")), true);
+  const loopPaths = installedLoopPaths(codex, "global");
+  assert.equal(loopPaths.every((path) => existsSync(path)), true);
+  const receipt = JSON.parse(await readFile(join(codex, ".csx-install-receipt.json"), "utf8"));
+  assert.deepEqual(receipt.files.filter((path) => loopPaths.includes(resolve(path))).sort(), loopPaths);
+  assert.equal(loopPaths.every((path) => receipt.files.filter((owned) => resolve(owned) === path).length === 1), true);
   assert.equal(existsSync(join(codex, "agents", "csx-planner.toml")), true);
   assert.equal(existsSync(join(codex, "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
   const config = await readFile(join(codex, "config.toml"), "utf8");
@@ -194,6 +204,11 @@ test("project install uses the current directory and is isolated from global Cod
   assert.equal(existsSync(join(root, ".agents", "skills", "csx-spec", "SKILL.md")), true);
   assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "SKILL.md")), true);
   assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "agents", "openai.yaml")), true);
+  const loopPaths = installedLoopPaths(root, "project");
+  assert.equal(loopPaths.every((path) => existsSync(path)), true);
+  const receipt = JSON.parse(await readFile(join(root, ".codex", ".csx-install-receipt.json"), "utf8"));
+  assert.deepEqual(receipt.files.filter((path) => loopPaths.includes(resolve(path))).sort(), loopPaths);
+  assert.equal(loopPaths.every((path) => receipt.files.filter((owned) => resolve(owned) === path).length === 1), true);
   assert.equal(existsSync(join(root, ".codex", "agents", "csx-analyst.toml")), true);
   assert.equal(existsSync(join(home, ".codex")), false);
 });
@@ -373,6 +388,230 @@ test("repeat install updates receipt-owned files", async () => {
   assert.equal(config.split(MANAGED_START).length - 1, 1);
   assert.equal(config.split(FEATURE_MANAGED_START).length - 1, 1);
 });
+
+test("repeat install upgrades an exact pre-loop receipt with only the two loop additions", async () => {
+  const root = await temporary("pre-loop upgrade ");
+  await install({ scope: "project", projectRoot: root });
+  const { loopPaths, receiptPath, receipt: preLoopReceipt } = await makePreLoopInstallation(root);
+  const declarations = [];
+  const recordingApi = {
+    ...transactionApi,
+    async beginTransaction(declaration) {
+      declarations.push(declaration);
+      return transactionApi.beginTransaction(declaration);
+    }
+  };
+
+  await installCore({ scope: "project", projectRoot: root, transactionApi: recordingApi });
+
+  assert.equal(declarations.length, 1);
+  const declaration = declarations[0];
+  assert.deepEqual(declaration.participants[0].additions, loopPaths);
+  assert.deepEqual(
+    declaration.participants[0].paths,
+    [...new Set([...preLoopReceipt.files, join(root, ".codex", "config.toml"), receiptPath, ...loopPaths]
+      .map((path) => resolve(path)))].sort()
+  );
+  assert.equal(loopPaths.every((path) => declaration.snapshotSet.includes(path)), true);
+  assert.equal(loopPaths.every((path) => declaration.writeSet.includes(path)), true);
+  assert.equal(loopPaths.every((path) => existsSync(path)), true);
+  const upgradedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.deepEqual(upgradedReceipt.files.filter((path) => loopPaths.includes(resolve(path))).sort(), loopPaths);
+
+  await uninstall({ projectRoot: root });
+  assert.equal(loopPaths.every((path) => !existsSync(path)), true);
+  assert.equal(existsSync(join(root, ".agents", "skills", "csx-plan", "SKILL.md")), false);
+});
+
+test("direct pre-loop uninstall uses only receipt-owned paths and no upgrade additions", async () => {
+  const root = await temporary("pre-loop uninstall ");
+  await install({ scope: "project", projectRoot: root });
+  const { loopPaths } = await makePreLoopInstallation(root);
+  const declarations = [];
+  const recordingApi = {
+    ...transactionApi,
+    async beginTransaction(declaration) {
+      declarations.push(declaration);
+      return transactionApi.beginTransaction(declaration);
+    }
+  };
+
+  await uninstallCore({ projectRoot: root, transactionApi: recordingApi });
+
+  assert.equal(declarations.length, 1);
+  assert.deepEqual(declarations[0].participants[0].additions, []);
+  assert.equal(loopPaths.every((path) => !declarations[0].snapshotSet.includes(path)), true);
+  assert.equal(loopPaths.every((path) => !declarations[0].writeSet.includes(path)), true);
+  assert.equal(existsSync(join(root, ".agents", "skills", "csx-plan", "SKILL.md")), false);
+});
+
+test("pre-loop upgrade recovers additions, config, and receipt after forced process death", { skip: process.platform !== "linux" }, async () => {
+  const root = await temporary("pre-loop forced-death ");
+  const configPath = join(root, ".codex", "config.toml");
+  await install({ scope: "project", projectRoot: root });
+  const {
+    loopPaths,
+    receiptPath,
+    receiptText: preLoopReceiptText
+  } = await makePreLoopInstallation(root);
+  const preLoopConfig = await readFile(configPath, "utf8");
+  const installUrl = new URL("../lib/install.js", import.meta.url).href;
+  const transactionUrl = new URL("../lib/transaction.js", import.meta.url).href;
+  const writer = await runNodeModule(
+    `import { resolve } from "node:path";
+import { install } from ${JSON.stringify(installUrl)};
+import { beginTransaction, recoverTransactions } from ${JSON.stringify(transactionUrl)};
+const root = process.argv.at(-2);
+const receiptPath = resolve(process.argv.at(-1));
+const transactionApi = {
+  recoverTransactions,
+  async beginTransaction(declaration) {
+    const transaction = await beginTransaction(declaration);
+    return {
+      async write(path, data, options) {
+        await transaction.write(path, data, options);
+        if (resolve(path) === receiptPath) process.kill(process.pid, "SIGKILL");
+      },
+      remove: transaction.remove.bind(transaction),
+      commit: transaction.commit.bind(transaction),
+      rollback: transaction.rollback.bind(transaction),
+      close: transaction.close.bind(transaction)
+    };
+  }
+};
+await install({ scope: "project", projectRoot: root, transactionApi });`,
+    [root, receiptPath]
+  );
+  assert.equal(writer.signal, "SIGKILL", writer.stderr);
+  assert.equal(loopPaths.every((path) => existsSync(path)), true);
+  const interruptedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.deepEqual(interruptedReceipt.files.filter((path) => loopPaths.includes(resolve(path))).sort(), loopPaths);
+
+  const recoveryAttempts = [];
+  const recoveryApi = recordingRecoveryApi(
+    [...interruptedReceipt.files, configPath, receiptPath],
+    recoveryAttempts
+  );
+  let observedRecoveredPreimage = false;
+  const restoreHooks = __setTransactionTestHooks({
+    async beforeManifest() {
+      assert.equal(loopPaths.every((path) => !existsSync(path)), true);
+      assert.equal(await readFile(configPath, "utf8"), preLoopConfig);
+      assert.equal(await readFile(receiptPath, "utf8"), preLoopReceiptText);
+      observedRecoveredPreimage = true;
+    }
+  });
+  try {
+    await installCore({ scope: "project", projectRoot: root, transactionApi: recoveryApi });
+  } finally {
+    restoreHooks();
+  }
+
+  assert.deepEqual(recoveryAttempts.map(({ recovered }) => recovered), [false, true]);
+  assert.equal(recoveryAttempts[0].errorCode, "recovery_required");
+  assert.deepEqual(recoveryAttempts[0].paths, recoveryAttempts[1].paths);
+  assert.deepEqual(recoveryAttempts[0].additions, []);
+  assert.equal(loopPaths.every((path) => recoveryAttempts[0].expectedFiles.includes(path)), true);
+  assert.deepEqual(recoveryAttempts[1].additions, loopPaths);
+  assert.equal(loopPaths.every((path) => !recoveryAttempts[1].expectedFiles.includes(path)), true);
+  assert.equal(observedRecoveredPreimage, true);
+  assert.equal(loopPaths.every((path) => existsSync(path)), true);
+  const recoveredReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.deepEqual(recoveredReceipt.files.filter((path) => loopPaths.includes(resolve(path))).sort(), loopPaths);
+  assert.equal(loopPaths.every((path) => recoveredReceipt.files.filter((owned) => resolve(owned) === path).length === 1), true);
+
+  await uninstallCore({ projectRoot: root });
+  assert.equal(loopPaths.every((path) => !existsSync(path)), true);
+});
+
+test("direct pre-loop uninstall recovers its exact no-additions split after forced process death", { skip: process.platform !== "linux" }, async () => {
+  const root = await temporary("pre-loop uninstall forced-death ");
+  const configPath = join(root, ".codex", "config.toml");
+  const keepPath = join(root, ".codex", "agents", "keep.toml");
+  await install({ scope: "project", projectRoot: root });
+  const {
+    loopPaths,
+    receiptPath,
+    receipt: preLoopReceipt,
+    receiptText: preLoopReceiptText
+  } = await makePreLoopInstallation(root);
+  const preLoopConfig = await readFile(configPath, "utf8");
+  await writeFile(keepPath, "keep\n");
+  const installUrl = new URL("../lib/install.js", import.meta.url).href;
+  const transactionUrl = new URL("../lib/transaction.js", import.meta.url).href;
+  const writer = await runNodeModule(
+    `import { resolve } from "node:path";
+import { uninstall } from ${JSON.stringify(installUrl)};
+import { beginTransaction, recoverTransactions } from ${JSON.stringify(transactionUrl)};
+const root = process.argv.at(-2);
+const receiptPath = resolve(process.argv.at(-1));
+const transactionApi = {
+  recoverTransactions,
+  async beginTransaction(declaration) {
+    const transaction = await beginTransaction(declaration);
+    return {
+      write: transaction.write.bind(transaction),
+      async remove(path) {
+        await transaction.remove(path);
+        if (resolve(path) === receiptPath) process.kill(process.pid, "SIGKILL");
+      },
+      commit: transaction.commit.bind(transaction),
+      rollback: transaction.rollback.bind(transaction),
+      close: transaction.close.bind(transaction)
+    };
+  }
+};
+await uninstall({ projectRoot: root, transactionApi });`,
+    [root, receiptPath]
+  );
+  assert.equal(writer.signal, "SIGKILL", writer.stderr);
+  assert.equal(existsSync(receiptPath), false);
+  assert.equal(preLoopReceipt.files.every((path) => !existsSync(path)), true);
+  assert.equal(loopPaths.every((path) => !existsSync(path)), true);
+  assert.equal(existsSync(keepPath), true);
+
+  const recoveryAttempts = [];
+  const recoveryApi = recordingRecoveryApi(
+    [...preLoopReceipt.files, ...loopPaths, configPath, receiptPath, keepPath],
+    recoveryAttempts
+  );
+  let observedRecoveredPreimage = false;
+  const restoreHooks = __setTransactionTestHooks({
+    async beforeManifest({ operation, participants }) {
+      assert.equal(operation, "uninstall");
+      assert.deepEqual(participants[0].additions, []);
+      assert.equal(loopPaths.every((path) => !participants[0].paths.includes(path)), true);
+      assert.equal(preLoopReceipt.files.every((path) => existsSync(path)), true);
+      assert.equal(loopPaths.every((path) => !existsSync(path)), true);
+      assert.equal(await readFile(configPath, "utf8"), preLoopConfig);
+      assert.equal(await readFile(receiptPath, "utf8"), preLoopReceiptText);
+      observedRecoveredPreimage = true;
+    }
+  });
+  let removed;
+  try {
+    removed = await uninstallCore({ projectRoot: root, transactionApi: recoveryApi });
+  } finally {
+    restoreHooks();
+  }
+
+  assert.equal(removed.removed, true);
+  assert.deepEqual(recoveryAttempts.map(({ recovered }) => recovered), [false, true]);
+  assert.equal(recoveryAttempts[0].errorCode, "recovery_required");
+  assert.equal(recoveryAttempts.every(({ additions }) => additions.length === 0), true);
+  assert.equal(loopPaths.every((path) => recoveryAttempts[0].expectedFiles.includes(path)), true);
+  assert.equal(loopPaths.every((path) => !recoveryAttempts[1].expectedFiles.includes(path)), true);
+  assert.equal(observedRecoveredPreimage, true);
+  assert.equal(preLoopReceipt.files.every((path) => !existsSync(path)), true);
+  assert.equal(loopPaths.every((path) => !existsSync(path)), true);
+  assert.equal(existsSync(receiptPath), false);
+  assert.equal(await readFile(keepPath, "utf8"), "keep\n");
+  assert.deepEqual(
+    await uninstallCore({ projectRoot: root, transactionApi: recoveryApi }),
+    { removed: false }
+  );
+});
+
 test("repeat install retains valid receipt setup agent selections", async () => {
   const root = await temporary("repeat setup receipt ");
   await install({ scope: "project", projectRoot: root });
@@ -717,6 +956,72 @@ async function temporary(prefix) {
   roots.push(root);
   return resolve(root);
 }
+
+function installedLoopPaths(root, scope = "project") {
+  const skillsRoot = scope === "global" ? join(root, "skills") : join(root, ".agents", "skills");
+  return [
+    resolve(join(skillsRoot, "csx-loop", "SKILL.md")),
+    resolve(join(skillsRoot, "csx-loop", "agents", "openai.yaml"))
+  ].sort();
+}
+
+async function makePreLoopInstallation(root, scope = "project") {
+  const receiptPath = scope === "global"
+    ? join(root, ".csx-install-receipt.json")
+    : join(root, ".codex", ".csx-install-receipt.json");
+  const loopPaths = installedLoopPaths(root, scope);
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  const currentLoopPaths = receipt.files
+    .map((path) => resolve(path))
+    .filter((path) => loopPaths.includes(path))
+    .sort();
+  assert.deepEqual(currentLoopPaths, loopPaths, "current-minus-pre-loop additions must be exactly two");
+  assert.equal(new Set(currentLoopPaths).size, 2, "current-minus-pre-loop additions must be unique");
+  await Promise.all(loopPaths.map((path) => rm(path)));
+  receipt.files = receipt.files.filter((path) => !loopPaths.includes(resolve(path)));
+  const receiptText = `${JSON.stringify(receipt, null, 2)}\n`;
+  await writeFile(receiptPath, receiptText);
+  return { loopPaths, receiptPath, receipt, receiptText };
+}
+
+function recordingRecoveryApi(observedPaths, attempts) {
+  return {
+    beginTransaction: beginRealTransaction,
+    async recoverTransactions(root, authority) {
+      const participant = authority.participants[0];
+      const attempt = {
+        expectedFiles: [...participant.expectedFiles],
+        additions: [...participant.additions],
+        paths: [...participant.paths],
+        recovered: false
+      };
+      const before = await fileStates(observedPaths);
+      try {
+        const recovered = await recoverRealTransactions(root, authority);
+        attempt.recovered = recovered.length > 0;
+        attempts.push(attempt);
+        return recovered;
+      } catch (error) {
+        assert.deepEqual(await fileStates(observedPaths), before);
+        attempt.errorCode = error.code;
+        attempts.push(attempt);
+        throw error;
+      }
+    }
+  };
+}
+
+async function fileStates(paths) {
+  return Promise.all([...new Set(paths.map((path) => resolve(path)))].sort().map(async (path) => {
+    try {
+      return [path, { state: "present", data: (await readFile(path)).toString("base64") }];
+    } catch (error) {
+      if (error.code === "ENOENT") return [path, { state: "absent" }];
+      throw error;
+    }
+  }));
+}
+
 function runNodeModule(script, args) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "--eval", script, ...args], {
