@@ -6,7 +6,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { discoverCodexModels } from "../lib/codex-models.js";
-import { AGENT_NAMES, LEGACY_VERIFIER_NAME, ROLE_NAMES, cloneMatrix, presetMatrix } from "../lib/presets.js";
+import {
+  AGENT_NAMES,
+  LEGACY_VERIFIER_NAME,
+  ROLE_NAMES,
+  WORKFLOW_LEADER_NAMES,
+  cloneMatrix,
+  presetMatrix
+} from "../lib/presets.js";
 import { applySetup, builtInPresets, codexModelContext, CUSTOM_PRESETS_FILE, readAgentMatrix, readCustomPresets, requestUniqueCustomPresetName, selectSetupScope, setupLayout } from "../lib/setup.js";
 import { LEADER_MANAGED_END, LEADER_MANAGED_START, install } from "../lib/install.js";
 import { RECEIPT_NAME } from "../lib/installation-state.js";
@@ -107,6 +114,41 @@ test("Efficient, Balanced, and Strong define Leader plus seven agents", async ()
   assert.deepEqual(builtIns.Balanced.leader, { model: "gpt-5.6-luna", reasoning: "max" });
   assert.deepEqual(builtIns.Strong["csx-architect"], { model: "gpt-5.6-sol", reasoning: "xhigh" });
   assert.equal(Object.values(builtIns).flatMap(Object.values).some(({ model }) => model.includes("terra")), false);
+});
+
+test("setup changes top-level Leader and specialists without rewriting workflow Leader files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-inherited-leaders-"));
+  try {
+    await install({ scope: "project", projectRoot: root });
+    const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
+    const leaderPaths = WORKFLOW_LEADER_NAMES.map((name) =>
+      join(layout.agentsRoot, `${name}.toml`));
+    const before = await Promise.all(leaderPaths.map((path) => readFile(path, "utf8")));
+
+    const baseline = presetMatrix("Balanced");
+    const matrix = cloneMatrix(baseline);
+    const strong = presetMatrix("Strong");
+    matrix.leader = strong.leader;
+    matrix[AGENT_NAMES[0]] = strong[AGENT_NAMES[0]];
+    await applySetup({
+      layout,
+      matrix,
+      baselineMatrix: baseline,
+      catalog,
+      selectedAgents: ["leader", AGENT_NAMES[0]],
+      env: { HOME: root }
+    });
+
+    const after = await Promise.all(leaderPaths.map((path) => readFile(path, "utf8")));
+    assert.deepEqual(after, before);
+    assert.match(await readFile(layout.configPath, "utf8"), /model = "gpt-5\.6-sol"/);
+    assert.match(
+      await readFile(join(layout.agentsRoot, `${AGENT_NAMES[0]}.toml`), "utf8"),
+      /model = "gpt-5\.6-sol"/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 test("preset names normalize, retain legacy aliases, and reject missing or extra roles", () => {
   assert.deepEqual(presetMatrix(" efficient "), presetMatrix("Efficient"));

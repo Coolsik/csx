@@ -18,7 +18,13 @@ import {
   uninstall as uninstallCore,
   windowsCommand
 } from "../lib/install.js";
-import { AGENT_NAMES, LEGACY_VERIFIER_NAME, presetMatrix } from "../lib/presets.js";
+import {
+  AGENT_NAMES,
+  INSTALLED_AGENT_NAMES,
+  LEGACY_VERIFIER_NAME,
+  WORKFLOW_LEADER_NAMES,
+  presetMatrix
+} from "../lib/presets.js";
 import {
   HISTORICAL_INSTALLATION_FAMILIES,
   historicalInstallationTemplate
@@ -91,6 +97,15 @@ test("global install applies Balanced Leader while preserving the original for u
   assert.deepEqual(receipt.files.filter((path) => loopPaths.includes(resolve(path))).sort(), loopPaths);
   assert.equal(loopPaths.every((path) => receipt.files.filter((owned) => resolve(owned) === path).length === 1), true);
   assert.equal(existsSync(join(codex, "agents", "csx-planner.toml")), true);
+  for (const name of WORKFLOW_LEADER_NAMES) {
+    const path = join(codex, "agents", `${name}.toml`);
+    assert.equal(existsSync(path), true);
+    const definition = await readFile(path, "utf8");
+    assert.doesNotMatch(definition, /^model\s*=/m);
+    assert.doesNotMatch(definition, /^model_reasoning_effort\s*=/m);
+    assert.equal(receipt.files.includes(path), true);
+  }
+  assert.deepEqual(Object.keys(receipt.setupAgentMatrix.roles).sort(), ["leader", ...AGENT_NAMES].sort());
   assert.equal(existsSync(join(codex, "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
   const config = await readFile(join(codex, "config.toml"), "utf8");
   assert.match(config, new RegExp(LEADER_MANAGED_START));
@@ -105,6 +120,9 @@ test("global install applies Balanced Leader while preserving the original for u
   assert.match(config, /\[\[hooks\.SubagentStop\]\]/);
   assert.equal((config.match(/\[\[hooks\./g) ?? []).length, 3);
   assert.doesNotMatch(config, /\[agents\.csx-verifier\]/);
+  for (const name of INSTALLED_AGENT_NAMES) {
+    assert.match(config, new RegExp(`\\[agents\\.${name}\\]`));
+  }
   assert.match(config, /\[features\]\ndefault_mode_request_user_input = true/);
 
   await uninstall({ cwd: join(home, "unrelated"), env: { HOME: home } });
@@ -172,6 +190,42 @@ test("global install creates the default Codex home when absent", async () => {
 
   assert.equal(existsSync(join(codex, ".csx-install-receipt.json")), true);
   assert.equal(existsSync(join(codex, "skills", "csx-analyze", "SKILL.md")), true);
+});
+
+test("repeat install upgrades a pre-Leader receipt with both inherited workflow leaders", async () => {
+  const root = await temporary("pre leader upgrade ");
+  const configPath = join(root, ".codex", "config.toml");
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  await install({ scope: "project", projectRoot: root });
+
+  const leaderPaths = WORKFLOW_LEADER_NAMES.map((name) =>
+    join(root, ".codex", "agents", `${name}.toml`));
+  let config = await readFile(configPath, "utf8");
+  for (const name of WORKFLOW_LEADER_NAMES) {
+    config = config.replace(
+      new RegExp(`\\[agents\\.${name}\\]\\nconfig_file = "[^"]+"\\n\\n`),
+      ""
+    );
+  }
+  await writeFile(configPath, config);
+  for (const path of leaderPaths) await rm(path);
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.files = receipt.files.filter((path) => !leaderPaths.includes(path));
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+
+  await install({ scope: "project", projectRoot: root });
+
+  const upgradedConfig = await readFile(configPath, "utf8");
+  const upgradedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  for (const [index, path] of leaderPaths.entries()) {
+    assert.equal(existsSync(path), true);
+    assert.equal(upgradedReceipt.files.includes(path), true);
+    assert.match(upgradedConfig, new RegExp(`\\[agents\\.${WORKFLOW_LEADER_NAMES[index]}\\]`));
+  }
+  assert.deepEqual(
+    Object.keys(upgradedReceipt.setupAgentMatrix.roles).sort(),
+    ["leader", ...AGENT_NAMES].sort()
+  );
 });
 test("fresh global install moves transaction coordination into CODEX_HOME after bootstrap", async () => {
   const home = await temporary("root-local global coordination ");
@@ -641,13 +695,15 @@ await install({ scope: "project", projectRoot: root, transactionApi });`,
     restoreHooks();
   }
 
-  assert.deepEqual(recoveryAttempts.map(({ recovered }) => recovered), [false, true]);
+  assert.equal(recoveryAttempts.at(-1).recovered, true);
+  assert.equal(recoveryAttempts.slice(0, -1).every(({ recovered }) => recovered === false), true);
   assert.equal(recoveryAttempts[0].errorCode, "recovery_required");
-  assert.deepEqual(recoveryAttempts[0].paths, recoveryAttempts[1].paths);
+  assert.equal(recoveryAttempts.every(({ paths }) =>
+    JSON.stringify(paths) === JSON.stringify(recoveryAttempts[0].paths)), true);
   assert.deepEqual(recoveryAttempts[0].additions, []);
   assert.equal(loopPaths.every((path) => recoveryAttempts[0].expectedFiles.includes(path)), true);
-  assert.deepEqual(recoveryAttempts[1].additions, loopPaths);
-  assert.equal(loopPaths.every((path) => !recoveryAttempts[1].expectedFiles.includes(path)), true);
+  assert.deepEqual(recoveryAttempts.at(-1).additions, loopPaths);
+  assert.equal(loopPaths.every((path) => !recoveryAttempts.at(-1).expectedFiles.includes(path)), true);
   assert.equal(observedRecoveredFinal, true);
   assert.equal(loopPaths.every((path) => existsSync(path)), true);
   const recoveredReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
@@ -721,11 +777,12 @@ await uninstall({ projectRoot: root, transactionApi });`,
   }
 
   assert.equal(removed.removed, true);
-  assert.deepEqual(recoveryAttempts.map(({ recovered }) => recovered), [false, true]);
+  assert.equal(recoveryAttempts.at(-1).recovered, true);
+  assert.equal(recoveryAttempts.slice(0, -1).every(({ recovered }) => recovered === false), true);
   assert.equal(recoveryAttempts[0].errorCode, "recovery_required");
   assert.equal(recoveryAttempts.every(({ additions }) => additions.length === 0), true);
   assert.equal(loopPaths.every((path) => recoveryAttempts[0].expectedFiles.includes(path)), true);
-  assert.equal(loopPaths.every((path) => !recoveryAttempts[1].expectedFiles.includes(path)), true);
+  assert.equal(loopPaths.every((path) => !recoveryAttempts.at(-1).expectedFiles.includes(path)), true);
   assert.equal(beganReplacementTransaction, false);
   assert.equal(preLoopReceipt.files.every((path) => !existsSync(path)), true);
   assert.equal(loopPaths.every((path) => !existsSync(path)), true);

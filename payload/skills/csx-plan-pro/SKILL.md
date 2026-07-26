@@ -11,7 +11,13 @@ Use this skill when ordinary planning is not enough, but a full external orchest
 
 Produce one decision-ready, versioned plan with independent review pressure. Consensus exists only when Architect and Critic approve the same draft version. Do not start implementation unless the user explicitly selects the final `$csx-start-goal` handoff.
 
-The skill owns role sequencing, user decisions, assignment construction, version state, consensus routing, artifact persistence, and handoff. `csx-explorer` owns repository facts, `csx-analyst` owns requirement gaps and readiness, `csx-planner` owns every draft, `csx-architect` owns architectural review, and `csx-critic` owns actionability review. The root must not substitute its own specialist judgment or rewrite a reviewed draft.
+Root owns accepted-spec and user-decision authority. A distinct `csx-plan-leader` owns the
+planning run, role sequencing, assignment construction, version state, single-writer handoff
+artifacts, blocker ledger, consensus routing, and final envelope. `csx-explorer` owns repository
+facts, `csx-analyst` owns requirement gaps and readiness, `csx-planner` owns every draft and goal
+decomposition, `csx-architect` owns architectural review, and `csx-critic` owns post-clearance
+actionability review. Root must not act as Plan Leader, relay large specialist originals,
+substitute its own specialist judgment, or rewrite a reviewed draft.
 
 ## Canonical Workflow State
 
@@ -66,33 +72,161 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 ## Workflow
 
 1. Establish the requirements input:
-   - If an accepted final csx spec is supplied, treat its scope, non-goals, constraints, acceptance criteria, decisions, readiness, and evidence packet as binding. Reuse current evidence instead of repeating discovery. For brownfield work, call `csx-explorer` only to revalidate affected claims when the repository changed or material evidence may be stale. Call `csx-analyst` only if that revalidation exposes a material conflict or new plan-changing gap.
+   - If an accepted final csx spec is supplied, treat its stable topology IDs, scope,
+     non-goals, support boundaries, reliability classes, complexity budget, acceptance
+     criteria, decisions, readiness, and evidence packet as binding. Reuse current evidence
+     instead of repeating discovery. For brownfield work, call `csx-explorer` only to
+     revalidate affected claims when the repository changed or material evidence may be
+     stale. Call `csx-analyst` only if that revalidation exposes a material conflict or new
+     plan-changing gap.
    - Without an accepted spec, spawn `csx-explorer` for brownfield repository evidence and then pass its completed packet with the request to `csx-analyst`. For repository-independent greenfield work, Explorer may be omitted and Analyst may start directly. Run lanes in parallel only when the Analyst judgment does not depend on repository evidence.
 2. Route the accepted spec status or latest Analyst result before drafting:
    - `READY`: continue.
    - `READY_WITH_ASSUMPTIONS`: preserve every reversible assumption in the decision ledger and continue.
    - `BLOCKED`: resolve user-owned decisions in the root thread. If the blocker cannot be resolved, write a pre-draft BLOCKED artifact and skip Planner, Architect, and Critic. In the Output envelope set Approved Version to `N/A`, Planner Body to `Not created — blocked before drafting`, both review sections to `Not run — blocked before drafting`, and record the exact Analyst blockers.
 3. In the root thread, resolve user-owned decisions exposed by the Analyst. After an answer, resume the same Analyst when possible, or spawn a fresh Analyst with the complete request, evidence, prior result, and answer. Use the replacement readiness result; do not rescore requirements in the root.
-4. Give the accepted requirements, evidence packets, latest Analyst result when one was required, and user decisions to `csx-planner`. The Planner assignment must require `draft_version: 1`, the exact Planner Body Shape below, the Decision Record, implementation plan, acceptance criteria, Verification Matrix, risks, stop conditions, and deliberate content when applicable.
-5. Spawn `csx-architect` with the complete exact draft and version. Its assignment must require it to echo that version and provide:
-   - strongest counterargument against the favored path
-   - hidden coupling or boundary risk
-   - at least one tradeoff tension
-   - classification of every concern as accepted scope, concrete change-induced safety or regression risk, or optional hardening
-   - no blocking verdict based only on optional hardening or duplicated verification
-   - `CLEAR`, `WATCH`, or `BLOCK`
-6. After the Architect result returns, spawn `csx-critic` with the original request or input spec, user decisions, same complete draft, version, evidence, and Architect result. Its assignment must require the same version, verification of referenced files and symbols, simulation of two representative implementation steps, explicit reconciliation of the draft against original intent and decisions, and exactly one `APPROVED`, `REVISE`, or `BLOCKED` verdict. For `REVISE` or architectural `WATCH`/`BLOCK`, require one `Revision Brief` that reconciles both reviews, preserves every material blocker, identifies conflicting recommendations, and either gives the Planner an unambiguous correction or marks the unresolved user decision `BLOCKED`.
-   The Critic must use the same three concern classes and reject optional hardening, hypothetical unsupported environments, or duplicated checks as revision blockers.
-7. Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same `draft_version`. A missing or mismatched version is not consensus.
-8. Route every non-consensus result back through a complete review cycle:
-   - Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`, or an accepted material improvement requires revision.
-   - Resolve any new user-owned decision in the root thread before revision.
-   - Resume the same `csx-planner` when possible with the exact prior draft, Critic-owned `Revision Brief`, user decisions, and instruction to increment `draft_version` by exactly one. The root must not synthesize or reinterpret specialist feedback.
-   - If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, prior draft, and exact `Revision Brief`; record the fallback in the Review Ledger.
-   - Run a fresh Architect review followed by a fresh Critic review for the new version.
-9. Repeat until consensus or a maximum of 5 review cycles. An unresolvable blocker or failure to reach consensus after cycle 5 produces a BLOCKED artifact containing the best draft and unresolved blockers.
-10. Before finalization, require the final Critic result to confirm that the consensus draft matches the original request, input spec, and user decisions. If it reports a conflicting assumption or open decision that can change implementation, reconcile it with the user and start a new versioned review cycle.
-11. Write `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`. Place the exact Planner body reviewed in the consensus cycle inside the artifact envelope without modification. Append the exact Architect and Critic results, Review Ledger, and handoff as provenance outside that immutable body. Persist each artifact milestone before its canonical workflow checkpoint, and persist the terminal artifact before `finish`.
+4. Root spawns one `csx-plan-leader` with `fork_turns: "none"`, the accepted spec path and
+   digest, evidence paths, user-decision ledger, run ID, final plan path, and bounded scope
+   authority. Root sends paths and digests, not large originals, and does not concurrently
+   retain another plan handoff writer.
+5. Plan Leader assigns `csx-planner` the accepted inputs. Require `draft_version: 1`, the
+   exact Planner Body Shape, Decision Record, implementation plan, Planner-owned execution
+   goal decomposition, acceptance criteria, Verification Matrix, risks, stop conditions,
+   and deliberate content when applicable. Persist the returned body verbatim as
+   `draft-v001.md` and record its SHA-256 before review.
+6. Plan Leader assigns `csx-architect` the bounded scope authority plus draft path,
+   `draft_version`, and digest. Architect verifies the digest, reads the original directly,
+   and returns exactly `CLEAR` or `BLOCK`:
+   - include the strongest counterargument, hidden coupling or boundary risk, and at least
+     one real tradeoff tension;
+   - classify every concern as `accepted-scope defect`, `change-induced risk`, or
+     `optional hardening`;
+   - place non-blocking concerns under `Watch Items` in a `CLEAR` result; `WATCH` is not a
+     verdict;
+   - for `BLOCK`, include stable blocker IDs and an Architect-owned minimum
+     `Revision Brief`.
+7. Persist the Architect response verbatim and verify its digest. If it is `BLOCK`, record
+   Critic status `SKIPPED_ARCHITECT_NOT_CLEAR`; do not call Critic. Give Planner only the
+   Architect-owned Revision Brief path and digest for the next version.
+8. Only after Architect `CLEAR`, assign `csx-critic` the same draft path, version, digest,
+   stored Architect-review path and digest, accepted spec and decision paths, and bounded
+   assignment. Critic verifies the originals, simulates two representative implementation
+   steps, checks intent and criterion traceability, and returns `APPROVED`, `REVISE`, or
+   `BLOCKED`. A revision includes a Critic-owned minimum `Revision Brief`; Critic does not
+   reopen architectural scope or merge its brief with an Architect brief.
+9. Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same
+   `draft_version` and digest. A missing artifact, mismatched digest, version mismatch, or
+   unauthorized write is a structured blocker, never consensus.
+10. For a valid blocking review, resume Planner when possible with the exact previous draft
+    path, only the owner-specific Revision Brief path, user decisions, and instruction to
+    increment `draft_version` by exactly one. A replacement Planner receives verified
+    artifact paths and `fork_turns: "none"`; record the fallback. From version 2 onward it
+    must include a Scope Delta for every material change. Every new version restarts at
+    Architect, even when only Critic requested revision.
+11. Repeat with the same scope authority and blocker rules for a maximum of 5 cycles. Do
+    not automatically escalate to the user or lower rigor after cycle 2. An unresolvable
+    blocker or failure to reach same-version consensus after cycle 5 produces a complete
+    BLOCKED artifact containing the best draft, all stored reviews, Review Ledger, and
+    unresolved Blocker Ledger.
+12. Before finalization, require the final Critic result to confirm that the consensus
+    draft matches the original request, accepted spec, and user decisions. A genuine
+    user-owned conflict becomes a bounded Decision Packet to Root; after resolution create
+    a new version and restart at Architect.
+13. Plan Leader writes `.csx/plans/<slug>-pro.md` for both `APPROVED` and `BLOCKED`.
+    Assemble the exact stored Planner and reviewer originals into the envelope without
+    modification. Persist each artifact milestone before its canonical workflow checkpoint,
+    and persist the terminal artifact before `finish`.
+
+## Accepted Scope and Blocker Contract
+
+Only the following are scope authority:
+
+- the user's request and confirmed decisions;
+- accepted-spec goals, stable topology IDs, requirements, constraints, criteria, support
+  boundaries, non-goals, reliability classes, and complexity budget; and
+- a concrete safety or regression risk directly caused by the planned change.
+
+Reviewers cannot create product features, support promises, operating environments, threat
+models, compatibility guarantees, or future-extension requirements. A plan is sufficient when
+it fixes observable behavior and interfaces, data/authority/security boundaries, invariants,
+irreversible decisions and recovery, cross-module ownership and order, and verifiable completion.
+Local reversible helper structure, file naming, equivalent mechanisms, fixture details, and
+test-confirmable implementation choices belong to execution.
+
+A blocker must satisfy all four conditions:
+
+1. it is an `accepted-scope defect` or concrete `change-induced risk`;
+2. it cites specific evidence and a failure path;
+3. it must be decided before implementation rather than delegated as a local reversible choice;
+4. its requested correction is the smallest sufficient change.
+
+Otherwise record it as `optional hardening` in Watch Items. Before requesting new state, storage,
+compatibility, authority, recovery, or migration machinery, reviewers must show why a simpler
+local reversible design cannot satisfy accepted criteria.
+
+Maintain stable blocker IDs in a Blocker Ledger. A blocker first discovered after version 1 must
+identify the draft delta or newly applicable scope evidence that made it observable. Repeating
+the same blocker cannot expand the design indefinitely: narrow it to a minimum correction,
+delegate implementation detail, simplify the design, or declare a specific infeasibility.
+
+## Versioned Handoff Artifact
+
+The active Plan Leader is the only writer for:
+
+```text
+.csx/handoffs/<run-id>/
+├── manifest.json
+├── draft-v001.md
+├── architect-v001.md
+├── critic-v001.md
+├── revision-brief-v001.md
+└── current.md
+```
+
+`manifest.json` contains at least:
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "<run-id>",
+  "stage": "plan_review",
+  "draft_version": 1,
+  "draft_sha256": "<sha256>",
+  "status": "awaiting_architect"
+}
+```
+
+Every version file is immutable. Plan Leader persists specialist results verbatim, computes
+SHA-256, and sends later agents only bounded assignments with path, version, and digest.
+Architect, Critic, and Planner remain read-only and read the verified original directly. Do not
+relay originals over 8 KiB through messages and never create `CHUNK n/m`, `START`, or `END`
+courier protocols.
+
+Missing artifacts return `BLOCKED_ARTIFACT_MISSING`; digest mismatches return
+`BLOCKED_ARTIFACT_MISMATCH`. A Leader needing a direct write outside the current handoff tree or
+final plan returns `BLOCKED_UNAUTHORIZED_WRITE_SCOPE`; an observed unauthorized Leader write
+returns `BLOCKED_UNAUTHORIZED_WRITE`. Check workspace state before and after persistence.
+Handoff provenance is not runtime workflow state, hook input, or completion authority.
+
+## Leader Session Rotation
+
+At the boundary before the next Planner or review unit, when runtime model-window and last-call
+input-token metrics both exist, compute:
+
+```text
+context_usage_ratio = last_token_usage.input_tokens / model_context_window
+```
+
+Do not subtract cached input. Below 35% continue. At 35% through below 50%, checkpoint the latest
+artifact, ledger, digest, and next action. At 50% or after any context compaction, finish and
+terminate the current writer, verify the handoff, then start a `fork_turns: "none"` Plan Leader
+successor from artifacts. Never overlap writers.
+
+If either metric is unavailable, never estimate a ratio. Rotate after two completed review
+cycles, 90 minutes, a compaction, or when continuing would require relaying an original over
+8 KiB. Restore the accepted spec, current plan, stable ledger, completed and remaining criteria,
+scope fence, phase, next action, Decision Packet, and writer provenance from paths and digests.
+Leader rotation alone never creates a new user-visible top-level thread.
 
 ## csx-loop Composition Contract
 
@@ -171,9 +305,10 @@ The Architect assignment must review boundary, threat, compatibility, and rollba
 
 For initial decisions, review-exposed decisions, and final intent reconciliation, call `request_user_input` from the root thread only when a preference or tradeoff belongs to the user.
 
-- Ask 1-3 material questions, each with 2-3 mutually exclusive options.
+- Ask one material decision from the bounded Decision Packet at a time, with 2-3 mutually
+  exclusive options.
 - Put the recommended option first and suffix its label with `(Recommended)`.
-- Preserve user notes as plan constraints and pass them through Planner, Architect, and Critic reviews.
+- Preserve user notes in the decision artifact and return its path and digest to Plan Leader.
 - Never delegate this tool call to a sub-agent.
 - Fall back to a direct text question if the tool is unavailable.
 - An open decision that changes the execution path, public behavior, data handling, or acceptance criteria prevents approval.
@@ -187,8 +322,12 @@ For initial decisions, review-exposed decisions, and final intent reconciliation
 
 ## Proportionality Policy
 
-- Classify proposed work and review feedback as accepted scope, concrete change-induced safety or regression risk, or optional hardening.
+- Classify proposed work and review feedback as `accepted-scope defect`,
+  `change-induced risk`, or `optional hardening`.
 - Architect and Critic may block only the first two classes. New extremes, environments, threat models, compatibility promises, or general hardening remain follow-ups unless the user explicitly includes them.
+- No blocking verdict may be based only on optional hardening or duplicated verification.
+- Critic must use the same three concern classes after Architect clearance and must not
+  reopen architectural scope.
 - Undefined support boundaries that materially alter the design are user-owned decisions; do not resolve them by selecting an unbounded domain.
 - Keep the Verification Matrix minimal and deduplicated. Default to one primary-environment full suite plus affected-environment smoke checks, unless the accepted requirements or changed boundary explicitly require a complete matrix.
 - Reuse a single scenario across related criteria when it provides direct evidence and preserve stronger explicit evidence without multiplying equivalent checks.
@@ -209,11 +348,22 @@ draft_version: <N>
 
 ## Goal and Boundaries
 
+## Reliability and Complexity Budget
+
 ## Decision Record
 
 ## Acceptance Criteria
 
-## Plan
+## Execution Goals
+| Goal ID | Bounded Result | File Ownership | Criteria | Invariants | Verification / Rollback Boundary |
+
+Default to 5 or fewer goals, or 10 or fewer for large or high-risk work. Explain each
+exception. Combine strongly coupled changes to one file, state machine, or migration boundary
+as a vertical slice.
+
+## Scope Delta
+Required from draft_version 2 onward.
+| Change | Source | Scope / Criterion Authority | Scope Effect | Disposition |
 
 ## Verification Matrix
 | Criterion | Evidence | Command or Scenario | Expected Result | Failure Signal |
@@ -247,6 +397,9 @@ draft_version: <N or N/A>
 ## Review Ledger
 | Cycle | Draft Version | Architect | Critic | Revision Reason |
 
+## Blocker Ledger
+| Blocker ID | Class | First Seen | Evidence / Failure Path | Minimum Correction | Delta or New Applicability | Status |
+
 ## Unresolved Blockers
 
 ## Handoff
@@ -256,7 +409,13 @@ draft_version: <N or N/A>
 
 For a validated loop context whose selected kind is `csx-plan-pro`, whose accepted spec and slug match, and whose current plan-transition authority was consumed, replace the standalone handoff only for `Decision: APPROVED` backed by Architect `CLEAR` and Critic `APPROVED` for the same accepted `draft_version`. Return `plan_path`, `plan_kind: csx-plan-pro`, `plan_status: APPROVED`, the accepted `draft_version`, accepted reversible assumptions, repository marker, and complete loop provenance to the parent `$csx-loop`; do not call `request_user_input` and do not invoke `$csx-start-goal`. The immutable Planner Body and every existing review, revision, and maximum of 5 review cycles remain unchanged.
 
-Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`, an unresolvable blocker, a required-role failure, and review exhaustion cannot pass this gate. After the existing bounded review routing finishes without same-version consensus, return `BLOCKED`, the blocker, and last valid checkpoint to the parent and invalidate authority. Never auto-select or auto-loop `Refine further`. The parent alone may validate the return and derive the start-goal transition. If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged.
+Architect `BLOCK`, Critic `REVISE` or `BLOCKED`, an unresolvable blocker, a required-role
+failure, and review exhaustion cannot pass this gate. A CLEAR result may contain non-blocking
+Watch Items. After the existing bounded review routing finishes without same-version consensus,
+return `BLOCKED`, the blocker, and last valid checkpoint to the parent and invalidate authority.
+Never auto-select or auto-loop `Refine further`. The parent alone may validate the return and
+derive the start-goal transition. If the loop context or live authority is absent or invalid,
+use the standalone handoff below unchanged.
 
 After writing the artifact, call `request_user_input` from the root thread.
 

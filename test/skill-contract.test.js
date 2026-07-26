@@ -292,11 +292,11 @@ test("loop-aware spec and plans return to their parent without weakening standal
 
   assert.match(planPro, /Architect `CLEAR` and Critic `APPROVED` for the same accepted `draft_version`/);
   assert.match(planPro, /Return `plan_path`, `plan_kind: csx-plan-pro`, `plan_status: APPROVED`/);
-  assert.match(planPro, /Architect `WATCH` or `BLOCK`, Critic `REVISE` or `BLOCKED`/);
+  assert.match(planPro, /Architect `BLOCK`, Critic `REVISE` or `BLOCKED`/);
   assert.match(planPro, /review exhaustion cannot pass this gate/);
   assert.match(planPro, /Never auto-select or auto-loop `Refine further`/);
   assert.match(planPro, /immutable Planner Body and every existing review, revision, and maximum of 5 review cycles remain unchanged/);
-  assert.match(planPro, /If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged/);
+  assert.match(planPro, /If the loop context or live authority is absent or invalid,\s+use the standalone handoff below unchanged/);
 
   assert.match(spec, /use two sequential `request_user_input` calls/);
   assert.match(plan, /After writing the artifact, call `request_user_input`/);
@@ -531,34 +531,96 @@ test("csx-plan-pro delegates all specialist judgments and binds consensus to one
 
   assert.match(skill, /`csx-planner` owns every draft/);
   assert.match(skill, /`csx-architect` owns architectural review/);
-  assert.match(skill, /`csx-critic` owns actionability review/);
+  assert.match(skill, /`csx-critic` owns post-clearance\s+actionability review/);
   assert.match(skill, /If an accepted final csx spec is supplied/);
-  assert.match(skill, /Reuse current evidence instead of repeating discovery/);
-  assert.match(skill, /The Planner assignment must require `draft_version: 1`/);
-  assert.match(skill, /Spawn `csx-architect` with the complete exact draft and version/);
-  assert.match(skill, /After the Architect result returns, spawn `csx-critic`/);
-  assert.match(skill, /Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same `draft_version`/);
+  assert.match(skill, /Reuse current evidence\s+instead of repeating discovery/);
+  assert.match(skill, /Require `draft_version: 1`/);
+  assert.match(skill, /assigns `csx-architect` the bounded scope authority plus draft path/);
+  assert.match(skill, /Only after Architect `CLEAR`, assign `csx-critic`/);
+  assert.match(skill, /Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same/);
   assert.match(skill, /increment `draft_version` by exactly one/);
-  assert.match(skill, /Run a fresh Architect review followed by a fresh Critic review for the new version/);
-  assert.match(skill, /maximum of 5 review cycles/);
-  assert.match(skill, /BLOCKED artifact containing the best draft and unresolved blockers/);
-  assert.match(skill, /final Critic result to confirm that the consensus draft matches the original request/);
-  assert.match(skill, /require one `Revision Brief` that reconciles both reviews/);
-  assert.match(skill, /Critic-owned `Revision Brief`/);
-  assert.match(skill, /root must not synthesize or reinterpret specialist feedback/);
+  assert.match(skill, /Every new version\s+restarts at\s+Architect/);
+  assert.match(skill, /maximum of 5 cycles/);
+  assert.match(skill, /complete\s+BLOCKED artifact containing the best draft/);
+  assert.match(skill, /final Critic result to confirm that the consensus\s+draft matches the original request/);
+  assert.match(skill, /Architect-owned minimum\s+`Revision Brief`/);
+  assert.match(skill, /Critic-owned minimum `Revision Brief`/);
+  assert.match(skill, /Root must not act as Plan Leader/);
   assert.match(skill, /Any post-review change[\s\S]*invalidates both verdicts/);
-  assert.match(skill, /The Planner assignment must require/);
+  assert.match(skill, /Every Planner assignment must require/);
   assert.match(skill, /### Decision Drivers/);
   assert.match(skill, /### Options Considered/);
   assert.match(skill, /three concrete failure scenarios/);
   assert.match(skill, /unit, integration, e2e, and observability verification/);
   assert.match(skill, /## Planner Body Shape/);
-  assert.match(skill, /Place the exact Planner body reviewed in the consensus cycle inside the artifact envelope without modification/);
+  assert.match(skill, /Assemble the exact stored Planner and reviewer originals into the envelope without\s+modification/);
   assert.match(skill, /pre-draft BLOCKED artifact/);
   assert.match(skill, /Planner Body to `Not created — blocked before drafting`/);
   assert.match(skill, /The Architect assignment must review boundary, threat, compatibility, and rollback risk/);
   assert.match(skill, /The Critic assignment must return `REVISE` or `BLOCKED`/);
   assert.match(skill, /Never invoke execution from a BLOCKED plan/);
+});
+
+test("csx-plan-pro uses a single-writer sequential artifact gate with bounded blockers", async () => {
+  const [skill, leader, planner, architect, critic] = await Promise.all([
+    readSkill("csx-plan-pro"),
+    readAgent("csx-plan-leader"),
+    readAgent("csx-planner"),
+    readAgent("csx-architect"),
+    readAgent("csx-critic"),
+  ]);
+
+  assert.match(skill, /Root spawns one `csx-plan-leader` with `fork_turns: "none"`/);
+  assert.match(leader, /sandbox_mode = "workspace-write"/);
+  assert.doesNotMatch(leader, /^model\s*=/m);
+  assert.doesNotMatch(leader, /^model_reasoning_effort\s*=/m);
+  for (const specialist of [planner, architect, critic]) {
+    assert.match(specialist, /sandbox_mode = "read-only"/);
+  }
+
+  const architectGate = skill.indexOf("assigns `csx-architect`");
+  const skipCritic = skill.indexOf("SKIPPED_ARCHITECT_NOT_CLEAR");
+  const criticGate = skill.indexOf("Only after Architect `CLEAR`");
+  assert.ok(architectGate >= 0 && skipCritic > architectGate && criticGate > skipCritic);
+  assert.match(skill, /`WATCH` is not a\s+verdict/);
+  assert.match(skill, /Watch Items/);
+  assert.doesNotMatch(skill, /accepted material improvement requires revision/);
+
+  for (const classification of [
+    "accepted-scope defect",
+    "change-induced risk",
+    "optional hardening",
+  ]) {
+    assert.match(skill, new RegExp(classification));
+  }
+  assert.match(skill, /A blocker must satisfy all four conditions/);
+  assert.match(skill, /stable blocker IDs/);
+  assert.match(skill, /draft delta or newly applicable scope evidence/);
+  assert.match(skill, /simplify the design, or declare a specific infeasibility/);
+
+  assert.match(skill, /\.csx\/handoffs\/<run-id>\//);
+  assert.match(skill, /manifest\.json/);
+  assert.match(skill, /draft-v001\.md/);
+  assert.match(skill, /SHA-256/);
+  assert.match(skill, /Every version file is immutable/);
+  assert.match(skill, /Do not\s+relay originals over 8 KiB/);
+  assert.match(skill, /`BLOCKED_ARTIFACT_MISSING`/);
+  assert.match(skill, /`BLOCKED_ARTIFACT_MISMATCH`/);
+  assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE_SCOPE`/);
+  assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE`/);
+
+  assert.match(skill, /Required from draft_version 2 onward/);
+  assert.match(skill, /Default to 5 or fewer goals, or 10 or fewer/);
+  assert.match(skill, /vertical slice/);
+  assert.match(planner, /at most 5 goals, or at most 10/);
+  assert.match(planner, /Scope Delta/);
+
+  assert.match(skill, /Below 35% continue/);
+  assert.match(skill, /At 35% through below 50%/);
+  assert.match(skill, /At 50% or after any context compaction/);
+  assert.match(skill, /never estimate a ratio/);
+  assert.match(skill, /Never overlap writers/);
+  assert.match(skill, /Leader rotation alone never creates a new user-visible top-level thread/);
 });
 
 test("canonical workflows persist artifacts before fail-open token-CAS state milestones", async () => {
@@ -699,7 +761,7 @@ test("spec and planning workflows keep support and verification proportional", a
   assert.match(plan, /one full suite in the primary environment plus bounded smoke coverage/);
   assert.match(plan, /reject duplicated verification rows and scope-expanding hardening/);
   assert.match(planPro, /Architect and Critic may block only the first two classes/);
-  assert.match(planPro, /no blocking verdict based only on optional hardening or duplicated verification/);
+  assert.match(planPro, /[Nn]o blocking verdict may be based only on optional hardening or duplicated verification/);
   assert.match(planPro, /Critic must use the same three concern classes/);
   assert.match(planPro, /Default to one primary-environment full suite plus affected-environment smoke checks/);
 });
