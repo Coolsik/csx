@@ -9,7 +9,14 @@ Execute an accepted input with one Codex goal and a compact Markdown control art
 
 ## Orchestration Boundary
 
-The skill owns execution authority, aggregate goal state, assignment construction, dependency scheduling, artifact persistence, proportionality enforcement, rework routing, review invalidation, and final completion. `csx-planner` owns execution-goal decomposition, `csx-executor` owns implementation and rework, `$csx-deslop` owns bounded post-implementation cleanup, and `$csx-code-review` owns cumulative change review. The root may execute the exact accepted final verification commands and record their raw results, but must not weaken, reinterpret, or replace them.
+Root owns current-turn execution authority, active-goal compatibility, and user decisions. After
+entry, one `csx-start-goal-leader` is the logical owner for approved-goal intake, aggregate goal
+state, assignment construction, dependency scheduling, control-artifact persistence, targeted
+and cumulative verification, review routing, bounded rework, conditional deslop, and final
+completion. `csx-planner` alone owns execution-goal decomposition, `csx-executor` owns product
+implementation and code-changing rework, `$csx-deslop` owns one conditional integrated cleanup,
+and `$csx-code-review` owns cumulative change review. Do not nest a separate Execution Leader or
+Review Leader.
 
 ## Canonical Workflow State
 
@@ -72,6 +79,10 @@ Apply this policy to every direct subagent spawn or resume in this skill.
    - `$csx-loop` authority branch: apply every validation in `csx-loop Entry Contract` below. A successful validation is the current-turn execution selection equivalent for this entry only.
 2. Preserve the accepted input as binding execution context. Preserve its scope, non-goals, constraints, acceptance criteria, decisions, assumptions, Verification Matrix, risks, and stop conditions.
 3. Call `get_goal` before creating anything. Use exactly one aggregate Codex goal for the entire accepted plan. Resume the same goal and artifact when active, stop for a different active goal, and otherwise call `create_goal` once. Persist the created or resumed control artifact before beginning canonical workflow state.
+4. Spawn exactly one `csx-start-goal-leader` with `fork_turns: "none"`, accepted spec and
+   plan paths and digests, the current goal-artifact path and digest, repository marker,
+   decision ledger, approved execution goals, criteria progress, scope fences, and next action.
+   Root does not remain a competing goal-artifact writer.
 
 ## csx-loop Entry Contract
 
@@ -116,157 +127,225 @@ A question, blocker, cancellation, unrelated turn, permission stop, or ended wor
 
 ## Proportionality and Scope Control
 
-Classify every proposed requirement, check, and review finding as exactly one:
+Classify every requirement, test failure, review finding, and rework request as exactly one:
 
-- `accepted scope`: required by the accepted input;
-- `change-induced safety or regression`: a concrete correctness, security, data-integrity, compatibility, or supported-behavior defect introduced or exposed by the change;
-- `optional hardening`: a new extreme, environment, threat model, compatibility promise, or robustness improvement not required by the accepted input and not a concrete regression.
+- `accepted-scope defect`: required by the accepted input;
+- `change-induced risk`: a concrete correctness, security, data-integrity, compatibility, or
+  supported-behavior defect introduced or exposed by the change;
+- `optional hardening`: a new extreme, environment, threat model, compatibility promise, or
+  robustness improvement outside accepted scope.
 
-Only the first two classes may block completion. Record optional hardening as a follow-up; do not silently turn it into a new acceptance criterion, implementation goal, or review gate. If an undefined support boundary would materially change implementation, stop and ask the user instead of choosing an unbounded interpretation.
-
-Use the smallest evidence set that directly proves each criterion and relevant failure signal. Deduplicate commands and scenarios that prove the same behavior. By default, run the full suite once in the primary environment and bounded smoke coverage in other supported environments affected by the change. Run full cross-environment matrices only when the accepted input explicitly requires them or the change alters that environment boundary.
+Only the first two may block completion. Optional hardening remains a follow-up and cannot
+become a new criterion, goal, file, mechanism, or review gate. Preserve accepted reliability
+classes. Do not add stronger ordering, persistence, recovery, compatibility, or audit machinery
+without accepted scope authority.
 
 ## Goal Artifact
 
-Create or resume `.csx/goals/<slug>.md` as the current execution source of truth. Keep it compact:
-
-After a successful loop-authority entry, record the validated loop provenance and accepted boundaries under `Objective and Accepted Boundaries`. This is checkpoint provenance only and does not remain or become live authority.
+The active Start-Goal Leader is the only direct writer of `.csx/goals/<slug>.md`. Product
+source changes are always delegated to an Executor. Keep this compact control shape:
 
 ```markdown
 # Goal: <title>
 
 ## Objective and Accepted Boundaries
+- Accepted spec / plan path and SHA-256:
+- Reliability classes and support boundaries:
+- Explicit non-goals:
 
 ## Current Revision
 Current: R000
 Latest cause:
 Changed paths:
-Invalidated current evidence:
+Invalidated evidence:
+
+## Lifecycle Phase
+approved_goal_intake | implementation | targeted_verification | integration_static |
+first_full_suite | review | bounded_rework | final_verification | complete | blocked
 
 ## Attempt Counters
-- Goal implementation corrections:
-  - G001: 0/1
-- Final cumulative verification: 0/3
-- Verification failure repairs:
-  - V001: 0/2
-- Environment reruns:
-  - V001: 0/1
-- Cumulative code review: 0/3
-- Review finding repairs:
-  - F001: 0/2
+- Full suite: 0/2
+- Integrated deslop: 0/1
+- Assignment timeout status checks:
+- Same-cause tool retries:
 
 ## Success Criteria
-- [ ] AC1: <preserved criterion>
-  - Evidence: <minimal command/scenario and current result>
+- [ ] AC1: <preserved stable criterion>
+  - Evidence:
 
-## Execution Goals
+## Approved Execution Goals
 ### G001: <bounded result>
 - Dependencies:
-- Owner:
-- Files:
+- Files and ownership:
 - Criteria:
-- Verification:
-- Stop conditions:
-- Status: pending | in_progress | ready_for_review | rework | complete
-- Current evidence:
-- Deslop:
+- Invariants:
+- Allowed dependencies:
+- Forbidden scope:
+- Focused verification:
+- Status: pending | in_progress | implemented | rework | complete | blocked
 
+## Finding Ledger
 ## Boundary Review
-
-## Final Verification
-
-## Review
-
+## Verification Evidence
 ## Completion Decision
 ```
 
-Keep only the current revision, current goal state, latest valid evidence, attempt counters, and open findings in the active sections. Collapse older revisions to short provenance rows. Increment every applicable attempt counter before dispatching the work or running the command so interruption and resume cannot create a free retry. Give subagents only their goal scope, relevant current diff, criteria, latest evidence, and stop conditions rather than forwarding the complete historical artifact.
+Record validated loop provenance as checkpoint provenance only, never renewed authority.
+Validate every recovered spec, plan, and goal-artifact digest. Keep current evidence, counters,
+open findings, and next action; collapse history to provenance rows. A legacy missing count is
+recorded as `legacy baseline`, never guessed.
 
-Existing artifacts with legacy scoped or integrated verification fields remain resumable. Reconstruct counters from explicit recorded attempts and reviews when possible. When history does not prove a prior count, record `legacy baseline`, initialize the missing counter at zero for future attempts, and do not guess or block resume. Treat legacy verification fields as historical evidence; do not require or produce new independent-agent results.
+Before and after Leader writes, inspect workspace state. Direct writes outside the current goal
+artifact return `BLOCKED_UNAUTHORIZED_WRITE_SCOPE`; an observed unauthorized Leader write
+returns `BLOCKED_UNAUTHORIZED_WRITE` and prevents completion.
 
-## Preserve Success Criteria
+## Approved Goal Intake
 
-- Preserve every acceptance criterion and stable identifier from the accepted input without weakening it.
-- Before implementation, map each criterion to one minimal sufficient command, test, inspection, or manual scenario with an expected result and failure signal.
-- Do not multiply tests merely to create one row per criterion; one direct scenario may cover several related criteria.
-- Do not invent limits, hostile inputs, platforms, or compatibility promises that the accepted input does not establish.
-
-## Define Execution Goals
-
-1. Confirm `csx-planner` and `csx-executor` are available. If either is missing, keep the aggregate goal active, record `blocked: required role unavailable`, and ask the user to rerun `csx install`.
-2. Assign `csx-planner` the accepted input, current evidence, boundaries, decisions, criteria, and proportional Verification Matrix. Require a complete `G001...Gnnn` breakdown with bounded results, dependencies, exact file ownership, ordered handoffs for shared paths, mapped criteria, minimal verification, expected results, failure signals, and stop conditions.
-3. Return one defective decomposition to the Planner for one corrected replacement. If it still has unmapped criteria, unsafe ownership overlap, scope expansion, or a user-owned decision, keep the goal active and report the blocker.
-4. Persist stable goal identifiers and use:
-   - Normal: `pending -> in_progress -> ready_for_review -> complete`
-   - Code-changing review failure: `ready_for_review -> rework -> in_progress -> ready_for_review`
-5. A dependency is satisfied when its prerequisite is `ready_for_review` with current executor and deslop evidence. Run only independent, non-overlapping goals in parallel and maintain one active owner per path.
+1. Preserve every accepted criterion, stable scope ID, goal, file ownership, invariant,
+   reliability class, support boundary, non-goal, risk, and stop condition.
+2. If an approved plan already contains execution goals, import that decomposition unchanged.
+   Start-Goal Leader must not merge, split, reorder, or redesign it.
+3. A direct accepted spec or legacy plan without goals requires one `csx-planner`
+   decomposition before execution. Require bounded results, dependencies, file ownership,
+   criteria, invariants, allowed dependencies, forbidden scope, focused evidence, and stop
+   conditions. Planner remains the only owner of goal structure.
+4. Default planning budgets are 5 goals for normal work and 10 for large or high-risk work.
+   An excess goal needs an independent ownership, verification, or rollback boundary.
+   Strongly coupled work on one file, state machine, or migration boundary is a vertical slice.
+5. If the decomposition is defective or new scope is required, stop and route it to Planner or
+   Root. Start-Goal Leader never repairs goal structure itself and never nests an Execution
+   Leader or Review Leader.
 
 ## Architecture Boundary Review
 
-Before implementation, require one `csx-architect` boundary review only when the accepted work changes a public interface, persisted data, permission or security boundary, migration, concurrency model, cross-module dependency contract, or operational contract.
+Before implementation, require one `csx-architect` boundary review only when the accepted work
+changes a public interface, persisted data, permission/security boundary, migration, concurrency
+model, cross-module contract, or operational contract.
 
-- Reuse a current Architect `CLEAR` from an approved `csx-plan-pro` when it covers the same accepted version and boundaries.
-- Otherwise assign one bounded pre-implementation review of feasibility, coupling, compatibility, migration, and recovery within the accepted scope.
-- If that review is required but `csx-architect` is unavailable, keep the aggregate goal active, record `blocked: required architecture role unavailable`, and ask the user to rerun `csx install`.
-- `BLOCK` stops execution only for an accepted-scope contradiction or concrete change-induced safety/regression risk.
-- `WATCH` and optional hardening are recorded without expanding scope.
+- Reuse Architect `CLEAR` from an approved pro plan only for the same version, digest, and
+  boundaries.
+- Otherwise run one bounded read-only review inside accepted scope.
+- `BLOCK` stops only for an accepted-scope defect or change-induced risk. Non-blocking items
+  are `Watch Items` in `CLEAR`; `WATCH` is not a verdict.
 - Localized or non-architectural work records `skipped-not-architectural`.
 
-## Change Revisions and Evidence Validity
+## Executor Scope Fence
 
-- Initialize `change_revision` as `R000` and increment it after returned changes to source, tests, configuration, generated content, or documentation.
-- Record only the changed paths, cause, and specifically invalidated current evidence.
-- Invalidate evidence only when its observed behavior, owned file, mapped criterion, public contract, or dependency behavior changed.
-- A test-only change invalidates results that use that test, not unrelated product evidence. A documentation-only change invalidates documentation evidence, not product behavior evidence.
-- Any product code change after final verification or code-review approval invalidates those two final gates. Editorial-only artifact updates do not.
-- Require deslop and code-review results to echo the assigned revision. Never reuse stale or mismatched evidence.
+Always assign implementation and code-changing rework to `csx-executor`. Every assignment must
+state:
 
-## Assign and Implement
+- exact allowed files and ownership;
+- responsible acceptance criteria and stable scope IDs;
+- invariants that must remain true;
+- allowed dependency paths;
+- explicit forbidden files, behavior, schema, support, and authority boundaries;
+- focused tests with expected results and failure signals; and
+- the required structured stop result for scope expansion.
 
-Always assign implementation and code-changing rework to `csx-executor`. For each goal:
+The Executor may make local reversible implementation choices. If implementation needs an
+unapproved file, criterion, public behavior, persisted schema, support environment, permission
+boundary, reliability guarantee, or irreversible choice, it must make no expansion edit and
+return:
 
-1. Set it to `in_progress`.
-2. Assign exact owned files, criteria, minimal targeted verification, expected results, failure signals, dependency state, accepted boundaries, and stop conditions.
-3. Require status, changed files, addressed criteria, commands and raw results, assumptions, blockers, and residual risk.
-4. Allow the initial Executor assignment to implement, debug, and rerun its targeted verification as needed within its bounded scope. After it returns, allow at most one orchestration-level correction round per goal for a recoverable defect before `ready_for_review`; increment that goal's `0/1` counter before dispatch. If the corrected result is still defective, even with a different defect, or requires ownership expansion or a user-owned decision, stop and report the blocker. Final-verification and review rework use their own counters and neither consume nor reset this implementation correction.
-5. For every non-trivial code goal, invoke `$csx-deslop` once with the current revision, owned changed files and tests, accepted invariants, passing targeted verification, current diff, and stop conditions. A low-risk documentation or wording-only goal may record `deslop: not applicable`.
-6. Accept only `passed/cleaned` or `passed/no-op` for the final revision. Record its before/after behavior lock and residual risk. On `blocked`, a failed behavior lock, a changed verification command, scope expansion, or revision mismatch, keep the goal below `ready_for_review`, record the blocker, and stop this workflow without assigning another repair.
-7. Set the goal to `ready_for_review` when executor verification and required deslop pass. There is no separate scoped evidence agent.
+```text
+SCOPE_EXPANSION_REQUIRED
+Reason:
+Affected criterion:
+Required files or boundary:
+User decision required: yes | no
+```
 
-## Final Cumulative Verification
+Do not automatically add that work to the current or a new goal. Root resolves user-owned
+decisions; Planner owns any approved decomposition change.
 
-When every goal is `ready_for_review`, execute the accepted cumulative verification on the unchanged current revision. Allow at most three cumulative verification iterations, including the first run and any full rerun invalidated by later code-review rework. Increment the persisted iteration counter before each full run; a new failure or revision never resets it.
+## Implementation and Test-First Review Gate
 
-- Deduplicate equivalent commands and honor stronger explicit requirements from the accepted plan.
-- The root records commands, environment, exit status, and concise raw summaries without changing the success criteria.
-- For every failure, assign a stable `Vnnn` identifier from the command or scenario, primary failure signal, and owning goal when one exists. Preserve that identifier while the material failure remains the same, even when wording or line numbers change.
-- Classify each failure as exactly one of `product defect`, `test or verification defect`, `environment or transient failure`, or `unknown, scope, or user-decision blocker`.
-- For a product defect, map it to the current owning goal. For a test or verification defect, map it to the goal that owns that evidence. Increment the failure's repair counter before bounded Executor rework and allow at most two repairs for the same failure. Rerun only invalidated targeted and deslop evidence, then start the next cumulative verification iteration on the new final revision.
-- For an environment or transient failure, do not edit code. Rerun the exact failing command once on the unchanged revision without incrementing the full-iteration counter, and persist its `0/1` environment-rerun counter before execution. If it fails again, stop with a blocker; if it passes, record the transient result and continue the current cumulative verification decision.
-- For an unknown failure, ownership or scope expansion, or a user-owned decision, do not guess or edit code; stop and report the blocker.
-- Stop before the numeric limits when a repair produces neither new evidence nor a reduction in blockers. Different failures retain distinct repair counters but still share the three-iteration cumulative maximum.
-- Do not create a separate integrated evidence agent or criterion-by-criterion verification pass.
+For each approved goal, Executor implements within its scope fence and runs its focused tests.
+Start-Goal Leader records changed files, criteria, exact commands, results, failure reasons,
+remaining verification, and residual risk. Independent non-overlapping goals may run in parallel
+with one active owner per path.
 
-## Cumulative Review Loop
+After all focused tests pass:
 
-After final cumulative verification succeeds, invoke `$csx-code-review` on the same revision with the accepted input, current criteria mapping, cumulative diff, executor/deslop evidence, boundary review, and final command results. Increment the persisted cumulative review counter before each invocation.
+1. run the accepted integration and static checks;
+2. run the first full suite in the primary supported environment, or the plan-authorized
+   proportional substitute for documentation/config-only work;
+3. only if all required evidence is green, invoke cumulative code and conditional architecture
+   review;
+4. group all accepted-scope and change-induced-risk findings by invariant family into one
+   bounded rework assignment;
+5. run affected focused tests after any code change; and
+6. run one final full suite only when review or conditional deslop changed code.
 
-1. The code-reviewer lane is always required.
-2. The Architect lane is required only when the final diff introduces or departs from a public interface, persisted-data, permission/security, migration, concurrency, cross-module dependency, or operational boundary not already cleared by the current boundary review. Diff size and file count alone do not require it.
-3. Only accepted-scope defects and change-induced safety/regression findings may return goals to `rework`. Optional hardening becomes a non-blocking follow-up.
-4. Assign and preserve a stable `Fnnn` identifier for each blocking finding from its classification, location, and material defect. Map it to the smallest affected goal and current owner. Ask the Planner for a corrected ownership handoff only when the finding crosses current ownership or requires an accepted-scope file not in the decomposition.
-5. Increment the finding's persisted repair counter before Executor rework. Run one union deslop pass for changed paths and affected invariants, the invalidated final verification, and the final review again.
-6. Allow at most two bounded repairs for the same blocking finding and at most three cumulative review iterations. Stop earlier when an iteration produces no new evidence or reduction in blockers.
+Code review must not begin while focused, integration/static, or first full-suite evidence is
+failing. If review makes no code change, the full suite runs exactly once. If code changes, the
+final full suite makes at most two total full-suite runs. A first-suite failure is repaired before
+review and consumes the possible second full-suite run; later review code changes then require a
+structured verification-budget blocker rather than an unproven third run. A new revision never
+resets the 2-run ceiling.
+
+Reviewers do not rerun the full suite. They may run only 1-3 focused reproductions to confirm a
+concrete finding. Code changes after review invalidate affected evidence and any prior completion
+decision.
+
+## Conditional Integrated Deslop
+
+Never run deslop per goal. Across the integrated change, invoke `$csx-deslop` at most once and
+only when at least one concrete trigger exists:
+
+- observed duplication or dead code;
+- an unnecessary abstraction at a cited path; or
+- an evidence-backed cleanup finding from review.
+
+Change size alone is not a trigger. Deslop cannot change public behavior, schema, authority,
+support, or reliability. Run affected focused regression tests afterward; if deslop changed code
+after the first full suite, it also consumes the one final full-suite run.
+
+## Bounded Waiting, Retry, and Leader Rotation
+
+Do not repeatedly short-poll agents. Give every assignment a justified expected duration and hard
+timeout, then use one sufficient wait. At timeout, send one status check. If progress still does
+not resume, terminate the old agent, confirm termination, and start at most one replacement with
+`fork_turns: "none"` from verified artifact paths, digests, completed work, open findings, and
+the next action—not a transcript.
+
+For the same tool-failure cause, correct the arguments and retry once. A second same-cause failure
+becomes a structured blocker until its cause changes.
+
+At a work-unit boundary, compute context usage only when runtime last-call input tokens and model
+window are both available:
+
+```text
+context_usage_ratio = last_token_usage.input_tokens / model_context_window
+```
+
+Below 35% continue; at 35% through below 50% checkpoint; at 50% or after any compaction, end the
+old Start-Goal Leader writer, verify the goal artifact, then start a `fork_turns: "none"`
+successor. If metrics are unavailable, never estimate them: rotate after ten rework passes,
+90 minutes, compaction, or when continuing requires relaying more than 8 KiB. Never overlap
+writers, and never create a user-visible top-level thread merely because Leader context grew.
+
+## Message and Evidence Budgets
+
+- Explorer and Analyst results: 2 KiB soft limit.
+- Planner status: 2 KiB soft limit; the complete plan is exempt.
+- Architect, Critic, Code Reviewer, and Executor completion: 4 KiB soft limit.
+
+These are message limits, not permission changes. Preserve read-only specialist sandboxes and
+exceed a limit rather than omit a material blocker or finding. Store or reference large evidence
+by verified path instead of relaying it.
 
 ## Complete
 
 Complete only when:
 
-- the accepted plan and every original criterion have current direct evidence;
-- every execution goal is `ready_for_review`;
-- required deslop reports pass at the current revision;
-- the latest cumulative verification succeeds at the unchanged revision;
-- the final code review returns `APPROVE`;
-- no product code changed afterward.
+- every accepted criterion and approved execution goal has current direct evidence;
+- every focused, integration/static, and required full-suite check passes on the final revision;
+- cumulative code review returns `APPROVE` and required architecture review is `CLEAR`;
+- conditional integrated deslop is passed/no-op or correctly not triggered;
+- no blocking finding, scope expansion, Decision Packet, unauthorized write, or stale digest
+  remains; and
+- no product code changed after final evidence.
 
-Then mark goals `complete`, write the completion decision, finish canonical workflow state after that artifact write, and call `update_goal` with `complete` exactly once.
+Then mark approved goals complete, persist the completion decision, finish canonical workflow
+state after that artifact write, and call `update_goal` with `complete` exactly once.

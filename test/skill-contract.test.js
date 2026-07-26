@@ -318,13 +318,12 @@ test("start-goal loop entry fails closed and retains the aggregate completion ga
   assert.match(skill, /BLOCKED: invalid loop approval context/);
   assert.match(skill, /Never fall back from a malformed loop claim to standalone authorization/);
   assert.match(skill, /When there is no loop claim, preserve the standalone Entry Gate unchanged/);
-  assert.match(skill, /record the validated loop provenance and accepted boundaries under `Objective and Accepted Boundaries`/);
-  assert.match(skill, /checkpoint provenance only and does not remain or become live authority/);
+  assert.match(skill, /Record validated loop provenance as checkpoint provenance only, never renewed authority/);
   assert.match(skill, /For a csx plan, accept only `Decision: READY`/);
   assert.match(skill, /explicit `Start execution with \$csx-start-goal` selection/);
-  assert.match(skill, /every original criterion have current direct evidence/);
-  assert.match(skill, /latest cumulative verification succeeds at the unchanged revision/);
-  assert.match(skill, /final code review returns `APPROVE`/);
+  assert.match(skill, /every accepted criterion and approved execution goal has current direct evidence/);
+  assert.match(skill, /every focused, integration\/static, and required full-suite check passes on the final revision/);
+  assert.match(skill, /cumulative code review returns `APPROVE`/);
   assert.match(skill, /call `update_goal` with `complete` exactly once/);
 });
 
@@ -655,59 +654,95 @@ test("canonical workflows persist artifacts before fail-open token-CAS state mil
   for (const skill of otherSkills) assert.doesNotMatch(skill, /csx workflow begin/);
 });
 
-test("csx-start-goal uses proportional executor, deslop, final-command, and review gates", async () => {
-  const skill = await readSkill("csx-start-goal");
+test("csx-start-goal executes approved goals through one test-first lifecycle leader", async () => {
+  const [skill, leader, executor] = await Promise.all([
+    readSkill("csx-start-goal"),
+    readAgent("csx-start-goal-leader"),
+    readAgent("csx-executor"),
+  ]);
 
   assert.match(skill, /Use exactly one aggregate Codex goal for the entire accepted plan/);
-  assert.match(skill, /Classify every proposed requirement, check, and review finding as exactly one/);
-  assert.match(skill, /accepted scope/);
-  assert.match(skill, /change-induced safety or regression/);
-  assert.match(skill, /optional hardening/);
-  assert.match(skill, /Only the first two classes may block completion/);
-  assert.match(skill, /smallest evidence set that directly proves each criterion/);
-  assert.match(skill, /full suite once in the primary environment/);
-  assert.match(skill, /bounded smoke coverage in other supported environments/);
-  assert.match(skill, /Preserve every acceptance criterion and stable identifier/);
-  assert.match(skill, /Assign `csx-planner` the accepted input/);
-  assert.match(skill, /complete `G001\.\.\.Gnnn` breakdown/);
-  assert.match(skill, /Always assign implementation and code-changing rework to `csx-executor`/);
-  assert.match(skill, /initial Executor assignment to implement, debug, and rerun its targeted verification/);
-  assert.match(skill, /at most one orchestration-level correction round per goal/);
-  assert.match(skill, /corrected result is still defective, even with a different defect/);
-  assert.match(skill, /invoke `\$csx-deslop` once/);
-  assert.match(skill, /stop this workflow without assigning another repair/);
-  assert.match(skill, /There is no separate scoped evidence agent/);
-  assert.doesNotMatch(skill, /csx-verifier/);
-  assert.doesNotMatch(skill, /\bVerifier\b/);
-  assert.match(skill, /at most three cumulative verification iterations/);
-  assert.match(skill, /including the first run and any full rerun invalidated by later code-review rework/);
-  assert.match(skill, /allow at most two repairs for the same failure/);
-  assert.match(skill, /`product defect`, `test or verification defect`, `environment or transient failure`, or `unknown, scope, or user-decision blocker`/);
-  assert.match(skill, /Rerun the exact failing command once on the unchanged revision/);
-  assert.match(skill, /For an unknown failure[\s\S]*do not guess or edit code/);
-  assert.match(skill, /new failure or revision never resets it/);
-  assert.match(skill, /root records commands, environment, exit status, and concise raw summaries/);
-  assert.match(skill, /Do not create a separate integrated evidence agent/);
-  assert.match(skill, /A test-only change invalidates results that use that test, not unrelated product evidence/);
-  assert.match(skill, /A documentation-only change invalidates documentation evidence, not product behavior evidence/);
-  assert.match(skill, /Run only independent, non-overlapping goals in parallel/);
-  assert.match(skill, /maintain one active owner per path/i);
-  assert.match(skill, /Initialize `change_revision` as `R000`/);
-  assert.match(skill, /Architecture Boundary Review/);
-  assert.match(skill, /Reuse a current Architect `CLEAR` from an approved `csx-plan-pro`/);
-  assert.match(skill, /Diff size and file count alone do not require it/);
-  assert.match(skill, /at most two bounded repairs for the same blocking finding/);
-  assert.match(skill, /at most three cumulative review iterations/);
-  assert.match(skill, /Goal implementation corrections:/);
-  assert.match(skill, /Final cumulative verification: 0\/3/);
-  assert.match(skill, /Verification failure repairs:/);
-  assert.match(skill, /Environment reruns:/);
-  assert.match(skill, /Cumulative code review: 0\/3/);
-  assert.match(skill, /Review finding repairs:/);
-  assert.match(skill, /Increment every applicable attempt counter before dispatching the work or running the command/);
-  assert.match(skill, /record `legacy baseline`/);
-  assert.match(skill, /current revision, current goal state, latest valid evidence, attempt counters, and open findings/);
+  assert.match(skill, /Spawn exactly one `csx-start-goal-leader` with `fork_turns: "none"`/);
+  assert.match(skill, /Do not nest a separate Execution Leader or\s+Review Leader/);
+  assert.match(leader, /sandbox_mode = "workspace-write"/);
+  assert.doesNotMatch(leader, /^model\s*=/m);
+  assert.doesNotMatch(leader, /^model_reasoning_effort\s*=/m);
+  assert.match(skill, /only direct writer of `\.csx\/goals\/<slug>\.md`/);
+  assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE_SCOPE`/);
+  assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE`/);
+
+  for (const classification of [
+    "accepted-scope defect",
+    "change-induced risk",
+    "optional hardening",
+  ]) {
+    assert.match(skill, new RegExp(classification));
+  }
+  assert.match(skill, /Preserve accepted reliability\s+classes/);
+  assert.match(skill, /import that decomposition unchanged/);
+  assert.match(skill, /Start-Goal Leader must not merge, split, reorder, or redesign it/);
+  assert.match(skill, /Default planning budgets are 5 goals for normal work and 10 for large or high-risk work/);
+  assert.match(skill, /vertical slice/);
+
+  for (const fence of [
+    "exact allowed files and ownership",
+    "responsible acceptance criteria",
+    "invariants that must remain true",
+    "allowed dependency paths",
+    "explicit forbidden files",
+  ]) {
+    assert.match(skill, new RegExp(fence));
+  }
+  assert.match(skill, /SCOPE_EXPANSION_REQUIRED/);
+  assert.match(skill, /Do not automatically add that work to the current or a new goal/);
+  assert.match(executor, /SCOPE_EXPANSION_REQUIRED/);
+  assert.match(executor, /4 KiB soft limit/);
+
+  const focused = skill.indexOf("After all focused tests pass");
+  const integration = skill.indexOf("run the accepted integration and static checks", focused);
+  const firstFull = skill.indexOf("run the first full suite", focused);
+  const review = skill.indexOf("invoke cumulative code", focused);
+  const rework = skill.indexOf("group all accepted-scope", focused);
+  const finalFull = skill.indexOf("run one final full suite", focused);
+  assert.ok(
+    focused >= 0 &&
+      integration > focused &&
+      firstFull > integration &&
+      review > firstFull &&
+      rework > review &&
+      finalFull > rework,
+    "focused, integration/static, full suite, review, rework, and final suite must be ordered",
+  );
+  assert.match(skill, /Code review must not begin while focused, integration\/static, or first full-suite evidence is\s+failing/);
+  assert.match(skill, /full suite runs exactly once/);
+  assert.match(skill, /at most two total full-suite runs/);
+  assert.match(skill, /A new revision never\s+resets the 2-run ceiling/);
+  assert.match(skill, /Reviewers do not rerun the full suite/);
+  assert.match(skill, /only 1-3 focused reproductions/);
+
+  assert.match(skill, /Never run deslop per goal/);
+  assert.match(skill, /invoke `\$csx-deslop` at most once/);
+  assert.match(skill, /Change size alone is not a trigger/);
+  assert.match(skill, /observed duplication or dead code/);
+  assert.match(skill, /unnecessary abstraction/);
+  assert.match(skill, /evidence-backed cleanup finding/);
+
+  assert.match(skill, /Do not repeatedly short-poll agents/);
+  assert.match(skill, /At timeout, send one status check/);
+  assert.match(skill, /retry once/);
+  assert.match(skill, /second same-cause failure\s+becomes a structured blocker/);
+  assert.match(skill, /Below 35% continue/);
+  assert.match(skill, /at 35% through below 50% checkpoint/);
+  assert.match(skill, /at 50% or after any compaction/);
+  assert.match(skill, /If metrics are unavailable, never estimate them/);
+  assert.match(skill, /Never overlap\s+writers/);
+  assert.match(skill, /never create a user-visible top-level thread merely because Leader context grew/);
+
+  assert.match(skill, /Full suite: 0\/2/);
+  assert.match(skill, /Integrated deslop: 0\/1/);
+  assert.match(skill, /recorded as `legacy baseline`/);
   assert.match(skill, /call `update_goal` with `complete` exactly once/);
+  assert.doesNotMatch(skill, /csx-verifier/);
 });
 
 test("csx-deslop delegates one cleanup and identical before-after proof to Executor", async () => {
