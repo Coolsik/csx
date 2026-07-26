@@ -776,10 +776,95 @@ test("csx-code-review always delegates code review and conditionally delegates a
   assert.match(skill, /Spawn `csx-architect` only when the final diff introduces, changes, or departs from/);
   assert.match(skill, /Diff size, file count, or ordinary cross-module call flow alone do not require the lane/);
   assert.match(skill, /Only `accepted-scope defect` and `change-induced safety\/regression` findings may produce/);
-  assert.match(skill, /`optional hardening` is non-blocking follow-up material/);
+  assert.match(skill, /`optional hardening` and unrelated refactoring are non-blocking follow-up material/);
   assert.match(skill, /Classification: accepted-scope defect \/ change-induced safety\/regression \/ optional hardening/);
   assert.match(skill, /`APPROVE`: Code Reviewer returns `APPROVE`; Architect is `CLEAR` or was validly skipped/);
   assert.match(skill, /must not perform either specialist review itself/);
+});
+
+test("csx-code-review completes blocking findings by invariant family after green tests", async () => {
+  const [skill, reviewer] = await Promise.all([
+    readSkill("csx-code-review"),
+    readAgent("csx-code-reviewer"),
+  ]);
+
+  const entryGate = skill.indexOf("## Test-First Entry Gate");
+  const reviewerLanes = skill.indexOf("## Independent Review Lanes");
+  assert.ok(entryGate >= 0 && reviewerLanes > entryGate, "green test gate must precede review");
+  assert.match(skill, /green focused tests/);
+  assert.match(skill, /required integration\/static checks/);
+  assert.match(skill, /first full-suite run/);
+  assert.match(skill, /`TESTS_NOT_GREEN`/);
+  assert.match(skill, /Reviewers never\s+rerun the full suite/);
+  assert.match(skill, /only 1-3 focused reproductions in total/);
+
+  for (const field of [
+    "invariant",
+    "affected_producers",
+    "affected_consumers",
+    "required_sweep",
+    "inspected_paths",
+    "uninspected_boundaries",
+  ]) {
+    assert.match(skill, new RegExp(`\\\`${field}\\\``));
+    assert.match(reviewer, new RegExp(`\\\`${field}\\\``));
+  }
+  assert.match(skill, /normal, resume, recovery or historical, adapter, and migration paths/);
+  assert.match(skill, /draft or code delta since the earlier review/);
+  assert.match(skill, /concrete reason the\s+path was not observable/);
+  assert.match(skill, /do not create a new blocker ID/);
+  assert.match(skill, /one bounded rework\s+packet per invariant family/);
+  assert.match(skill, /`WATCH` is not a verdict/);
+  assert.match(skill, /optional hardening` and unrelated refactoring are non-blocking/);
+  assert.match(skill, /4 KiB soft limit/);
+  assert.match(skill, /never grant a read-only reviewer general\s+workspace write access/);
+
+  assert.match(reviewer, /Never rerun the full suite/);
+  assert.match(reviewer, /only 1-3 focused reproductions in total/);
+  assert.match(reviewer, /Retain the stable ID through rework/);
+  assert.match(reviewer, /new blocker for the same\s+invariant requires a draft or code delta/);
+  assert.match(reviewer, /Optional hardening and unrelated refactoring are non-blocking/);
+  assert.match(reviewer, /4 KiB soft limit/);
+  assert.match(reviewer, /Remain read-only/);
+});
+
+test("README documents clarity gates, workflow leaders, and bounded execution review", async () => {
+  const readme = await readFile(resolve(root, "README.md"), "utf8");
+  const compact = readme.replace(/\s+/g, " ");
+
+  assert.match(compact, /Round 0 Intent Topology/);
+  assert.match(compact, /seven weighted clarity dimensions/);
+  assert.match(compact, /least-clear active sibling rather than an average/);
+  assert.match(compact, /Quick \(at least 80% clarity\), Standard \(90%\), and Strict \(95%\)/);
+  assert.match(compact, /No mode bypasses the common hard gate/);
+  assert.match(compact, /`durable`, `best-effort`, or `advisory`/);
+
+  assert.match(compact, /one Plan Leader as the only handoff and final-plan writer/);
+  assert.match(compact, /Only Architect `CLEAR` allows Critic/);
+  assert.match(compact, /`WATCH` is not a verdict/);
+  assert.match(compact, /evidence-backed, specific, necessary at planning time, minimal/);
+  assert.match(compact, /Plan Leader and Start-Goal Leader checkpoint/);
+  assert.match(compact, /context use reaches 35%/);
+  assert.match(compact, /at 50% or after compaction/);
+  assert.match(compact, /inherit the selected `LEADER` pair/);
+
+  assert.match(compact, /Planner-owned execution goals without merging, splitting, reordering, or redesigning/);
+  assert.match(compact, /normal complexity budget is five goals/);
+  assert.match(compact, /Every Executor assignment declares exact files and ownership/);
+  assert.match(compact, /`SCOPE_EXPANSION_REQUIRED`/);
+  assert.match(compact, /focused tests, integration\/static checks, the first full suite/);
+  assert.match(compact, /full suite therefore runs once[\s\S]*at most twice/);
+  assert.match(compact, /Deslop is not run per goal/);
+
+  assert.match(compact, /treats each blocking defect as an invariant family/);
+  assert.match(compact, /affected producers and consumers/);
+  assert.match(compact, /one bounded rework packet/);
+  assert.match(compact, /never rerun the full suite/);
+  assert.match(compact, /one to three focused reproductions/);
+  assert.match(compact, /one corrected retry/);
+  assert.match(compact, /one status check and at most one non-overlapping replacement/);
+  assert.match(compact, /2 KiB soft limit/);
+  assert.match(compact, /use 4 KiB/);
 });
 
 test("spec and planning workflows keep support and verification proportional", async () => {

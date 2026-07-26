@@ -48,6 +48,11 @@ scope's top-level `model` and `model_reasoning_effort` for the Leader as well as
 the seven agent files. Any previous Leader assignments are retained in the
 installation receipt and restored by `csx uninstall`.
 
+The installed `csx-plan-leader` and `csx-start-goal-leader` definitions do not
+pin their own model or reasoning effort. Their top-level sessions inherit the
+selected `LEADER` pair; setup continues to configure only that pair and the
+seven specialist roles.
+
 For the selected scope, installation also enables
 `features.default_mode_request_user_input` so `csx-spec`, `csx-plan`, and
 `csx-plan-pro` can present Codex's built-in choices and Tab notes in Default
@@ -177,6 +182,88 @@ replacement with the complete assignment. A tool or command known to still be
 running is not inactivity, and child skills monitor only their own direct
 subagents.
 
+### Workflow contracts
+
+`csx-spec` begins with a Round 0 Intent Topology. It identifies active outcome,
+artifact, surface, integration, constraint, non-goal, and priority components,
+assigns stable IDs and authority, and asks the user to confirm additions,
+removals, merges, splits, or deferrals before ambiguity scoring. Each active
+component is scored on seven weighted clarity dimensions. A dimension uses the
+least-clear active sibling rather than an average, so one detailed component
+cannot hide an ambiguous peer.
+
+The interview modes are Quick (at least 80% clarity), Standard (90%), and Strict
+(95%). At a reached Quick or Standard boundary the user may finalize or continue
+to a stronger mode; a user who already chose Strict is not asked again at the
+Standard boundary. No mode bypasses the common hard gate: material requirements
+must remain traceable, contradictions and scope changes must be resolved or
+explicitly disputed, and support boundaries and user-owned decisions must be
+closed. State restoration and diagnostics promises are recorded as `durable`,
+`best-effort`, or `advisory`; later planning and review cannot silently
+strengthen that reliability class.
+
+`csx-plan-pro` uses one Plan Leader as the only handoff and final-plan writer.
+For each immutable draft version, Architect runs first. Only Architect `CLEAR`
+allows Critic to review the same version; Architect `BLOCK` skips Critic and
+returns a bounded revision brief. `WATCH` is not a verdict—non-blocking concerns
+are Watch Items inside `CLEAR`. A blocker must be evidence-backed, specific,
+necessary at planning time, minimal, and either an accepted-scope defect or a
+direct change-induced risk. Optional hardening cannot force revision. From draft
+2 onward, every material change is recorded in Scope Delta with stable scope
+authority.
+
+The Plan Leader and Start-Goal Leader checkpoint the current artifact, ledger,
+and next action when context use reaches 35%, and rotate to a fresh leader
+session before the next review or execution unit at 50% or after compaction.
+Successors receive verified artifact paths, versions, and digests rather than a
+transcript. If context metrics are unavailable, leaders use phase-boundary
+rotation instead of guessing percentages. Session rotation does not create a
+new user-visible workflow or transfer artifact-writer ownership.
+
+`csx-start-goal` imports Planner-owned execution goals without merging,
+splitting, reordering, or redesigning them. A direct spec or legacy plan without
+goals goes through Planner once. The normal complexity budget is five goals and
+large or high-risk work may use ten; tightly coupled work remains one vertical
+slice unless it has an independent ownership, verification, or rollback
+boundary.
+
+Every Executor assignment declares exact files and ownership, responsible
+criteria and stable scope IDs, invariants, allowed dependencies, forbidden
+scope, and focused tests. Work needing an unapproved file, public behavior,
+persisted schema, supported environment, permission boundary, reliability
+guarantee, or irreversible decision stops as `SCOPE_EXPANSION_REQUIRED`; it is
+not automatically added to this or a new goal.
+
+Execution evidence follows one order: focused tests, integration/static checks,
+the first full suite, code and required architecture review, one bounded
+invariant-family rework if needed, affected focused tests, and a final full
+suite only when review or cleanup changed code. Review never starts while tests
+are red. The full suite therefore runs once when review changes no code and at
+most twice when it does; a revision never resets that ceiling. Deslop is not run
+per goal. It runs at most once on the integrated change, and only for observed
+duplication, dead code, unnecessary abstraction, or an evidence-backed cleanup
+finding.
+
+`csx-code-review` treats each blocking defect as an invariant family. A stable
+finding records the invariant, affected producers and consumers, required
+sweep, inspected paths, and uninspected boundaries across the applicable
+normal, resume/recovery, historical, adapter, and migration paths. Another
+blocker for the same invariant requires a new draft/code delta or a concrete
+reason the path was previously unobservable; otherwise it remains part of the
+existing family. Related findings return as one bounded rework packet.
+Reviewers stay read-only, never rerun the full suite, and may use only one to
+three focused reproductions for concrete findings.
+
+Leader tool calls with the same failure cause get one corrected retry; a second
+same-cause failure becomes a structured blocker. An inactive assignment gets
+one status check and at most one non-overlapping replacement, reconstructed
+from verified artifacts and open findings rather than a transcript. Explorer
+and Analyst messages use a 2 KiB soft limit; Planner status uses 2 KiB while
+complete plans are exempt; Architect, Critic, Code Reviewer, and Executor
+completion messages use 4 KiB. These are omission-resistant soft limits, not
+permission to drop material evidence or grant read-only specialists workspace
+write access.
+
 ### End-to-end loop
 
 Use `$csx-loop <request>` or `csx loop <request>` when one bounded request
@@ -233,25 +320,19 @@ matching live authority are absent.
 
 `csx-plan` and `csx-plan-pro` produce versioned planning artifacts under
 `.csx/plans/`. A revised draft must be reviewed again, and `csx-plan-pro`
-requires Architect `CLEAR` plus Critic `APPROVED` for the same draft version.
-Both skills record verification evidence and finish with an explicit choice to
-refine, stop, or authorize execution through `csx-start-goal`; BLOCKED plans
-cannot enter execution.
+requires sequential Architect `CLEAR` then Critic `APPROVED` for the same draft
+version. Both skills record verification evidence and finish with an explicit
+choice to refine, stop, or authorize execution through `csx-start-goal`;
+BLOCKED plans cannot enter execution.
 
-`csx-start-goal` creates one aggregate Codex goal for the accepted plan and asks
-the Planner to split it into bounded `G001...Gnnn` execution goals in
-`.csx/goals/`. Executors own all implementation and rework. The root invokes
-scoped `csx-deslop` cleanup after implementation rather than asking a leaf
-Executor to start another workflow. Deslop proves behavior preservation by
-running the same behavior lock before and after one bounded cleanup pass. Each
-goal permits one orchestration-level implementation correction after its
-Executor returns. When all execution goals are ready, the root runs at most
-three cumulative verification iterations, with at most two repairs for the
-same failure, and the unchanged complete diff must earn `APPROVE` within at most
-three cumulative `csx-code-review` iterations. Retry counters persist in the
-goal artifact. Findings outside accepted scope or concrete change-induced safety
-and regression risks are recorded as optional hardening rather than silently
-expanding the goal.
+`csx-start-goal` creates one aggregate Codex goal and one compact
+`.csx/goals/<slug>.md` control artifact for the accepted plan. One Start-Goal
+Leader owns that artifact; Executors own product implementation and rework.
+Planner remains the only owner of execution-goal decomposition. Completion
+requires current direct evidence for every accepted criterion and approved
+goal, green focused, integration/static, and required full-suite checks on the
+final revision, cumulative `APPROVE`, required architecture `CLEAR`, and no
+remaining blocker or stale digest.
 
 ## Lifecycle state and authority
 
