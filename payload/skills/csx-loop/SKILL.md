@@ -137,7 +137,9 @@ The explicit risk classification must agree with the spec boundary and recommend
 - Accept `$csx-plan` only with `Decision: READY`.
 - Accept `$csx-plan-pro` only with `Decision: APPROVED`, including same-version Architect `CLEAR` and Critic `APPROVED`.
 - In validated loop mode, the selected plan child returns its path, kind, status, accepted version and assumptions, repository marker, and loop provenance without its standalone execution handoff question.
-- Do not invoke `$csx-start-goal` before the selected plan's complete success gate. A `BLOCKED`, `REVISE`, `WATCH`, review exhaustion, version mismatch, or invalid return stops the loop.
+- Do not invoke `$csx-start-goal` before the selected plan's complete success gate. A `BLOCKED`,
+  `REVISE`, invalid legacy `WATCH` verdict, review exhaustion, version mismatch, or other invalid
+  return stops the loop.
 
 ### 4. Run csx-start-goal
 

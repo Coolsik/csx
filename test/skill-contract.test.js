@@ -826,6 +826,8 @@ test("csx-code-review completes blocking findings by invariant family after gree
   assert.match(reviewer, /Optional hardening and unrelated refactoring are non-blocking/);
   assert.match(reviewer, /4 KiB soft limit/);
   assert.match(reviewer, /Remain read-only/);
+  assert.match(reviewer, /active Leader remains\s+the single artifact writer/);
+  assert.match(reviewer, /Never request general workspace write access/);
 });
 
 test("README documents clarity gates, workflow leaders, and bounded execution review", async () => {
