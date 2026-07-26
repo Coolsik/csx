@@ -386,9 +386,9 @@ test("csx-spec delegates requirements judgment and spec content to Analyst", asy
     "Outcome",
     "Scope",
     "Non-goals",
-    "Constraints",
+    "Constraints / Tradeoffs",
     "Acceptance",
-    "Decisions",
+    "Decision Authority",
   ]) {
     assert.match(skill, new RegExp(`\\| ${dimension} \\|`));
   }
@@ -404,8 +404,8 @@ test("csx-spec delegates requirements judgment and spec content to Analyst", asy
   assert.match(skill, /does not rescore them/);
   assert.match(skill, /Do not update the ambiguity, scope, or decision ledgers in the root independently/);
   assert.match(skill, /Persist the accepted Analyst specification body without independently rewriting its requirements/);
-  assert.match(skill, /up to three questions in one call only when they are independent/);
-  assert.match(skill, /lightweight scope ledger when/);
+  assert.match(skill, /exactly the highest-priority material question per call/);
+  assert.match(skill, /## Intent Topology/);
   assert.match(skill, /prompt-safe summary/);
   assert.match(skill, /\.csx\/specs\/<slug>\.draft\.md/);
   assert.match(skill, /Write `\.csx\/specs\/<slug>\.md` only for `READY` or `READY_WITH_ASSUMPTIONS`/);
@@ -419,6 +419,82 @@ test("csx-spec delegates requirements judgment and spec content to Analyst", asy
   assert.match(skill, /Recommend `\$csx-plan-pro` for broad, risky, cross-module, or architecture-sensitive work/);
   assert.match(skill, /selecting it explicitly authorizes implementation/);
   assert.match(skill, /Invoke only the workflow the user explicitly selects/);
+});
+
+test("csx-spec locks topology, scores ambiguity, and closes every interview mode safely", async () => {
+  const [skill, analyst] = await Promise.all([
+    readSkill("csx-spec"),
+    readAgent("csx-analyst"),
+  ]);
+
+  const topology = skill.indexOf("### 3. Lock Round 0 Intent Topology");
+  const scoring = skill.indexOf("### 4. Score Active Components");
+  assert.ok(topology >= 0 && scoring > topology, "topology confirmation must precede scoring");
+  assert.match(skill, /add(?:ed)?,\s*removed,\s*merged,\s*split,\s*or explicitly deferred/);
+  for (const prefix of [
+    "outcome:",
+    "artifact:",
+    "surface:",
+    "integration:",
+    "constraint:",
+    "non-goal:",
+    "priority:",
+  ]) {
+    assert.match(skill, new RegExp(prefix.replace("-", "\\-")));
+  }
+  for (const authority of [
+    "USER_EXPLICIT",
+    "USER_CONFIRMED",
+    "REPO_REQUIRED",
+    "CODEX_ASSUMPTION",
+  ]) {
+    assert.match(skill, new RegExp(authority));
+    assert.match(analyst, new RegExp(authority));
+  }
+
+  assert.match(skill, /dimension_score = min\(active_component_dimension_scores\)/);
+  assert.match(skill, /clarity = Σ\(dimension_score × dimension_weight\)/);
+  assert.match(skill, /ambiguity = 1 - clarity/);
+  assert.match(skill, /never an average/);
+  assert.match(analyst, /never average siblings/);
+  assert.match(skill, /An answer\s+may increase ambiguity/);
+  assert.match(skill, /`disputed`/);
+  assert.match(skill, /`superseded_by`/);
+  assert.match(skill, /question_priority =/);
+  assert.match(skill, /implementation_impact/);
+  assert.match(skill, /authority_factor/);
+
+  for (const [mode, ambiguity, clarity] of [
+    ["Quick", "0\\.20", "80%"],
+    ["Standard", "0\\.10", "90%"],
+    ["Strict", "0\\.05", "95%"],
+  ]) {
+    assert.match(
+      skill,
+      new RegExp(`\\| \`${mode}\` \\| \`${ambiguity}\` \\| \`${clarity}\` \\|`),
+    );
+  }
+  assert.match(skill, /`Finalize at Quick`/);
+  assert.match(skill, /`Continue to Standard \(Recommended\)`/);
+  assert.match(skill, /`Continue to Strict`/);
+  assert.match(skill, /`Finalize at Standard`/);
+  assert.match(skill, /already selected Strict, do not repeat the Standard-boundary/);
+  assert.match(skill, /Never offer normal mode finalization or return READY while this hard gate fails/);
+
+  const closure = skill.indexOf("### 10. Run Closure Audit and Intent Restate");
+  const finalWrite = skill.indexOf("Write `.csx/specs/<slug>.md` only");
+  assert.ok(closure >= 0 && finalWrite > closure, "closure must precede final artifact writing");
+  assert.match(skill, /100% traceability/);
+  assert.match(skill, /From the first material answer/);
+  assert.match(skill, /Do not repeat the full\s+transcript/);
+  for (const reliability of ["durable", "best-effort", "advisory"]) {
+    assert.match(skill, new RegExp(`\`${reliability}\``));
+    assert.match(analyst, new RegExp(`\`${reliability}\``));
+  }
+  assert.match(skill, /normally at most 5 goals, or at most 10/);
+  assert.match(skill, /Interview Mode Achieved: Quick \| Standard \| Strict/);
+  assert.match(skill, /## Hard Gate and Closure Audit/);
+  assert.match(analyst, /2 KiB soft limit/);
 });
 
 test("csx-plan always delegates draft authorship and preserves versioned review", async () => {
