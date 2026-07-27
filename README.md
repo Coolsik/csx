@@ -158,8 +158,12 @@ The UserPromptSubmit hook recognizes prompts beginning with `csx analyze`, `csx 
 `csx code-review`. Ordinary natural-language prompts are not routed. Skills,
 including `csx-deslop`, use explicit invocation rather than implicit routing.
 
-Installed custom agents are namespaced `csx-*`: explorer, analyst, planner,
-architect, critic, executor, and code-reviewer.
+Installed custom agents are namespaced `csx-*`. Setup exposes seven configurable
+specialists: explorer, analyst, planner, architect, critic, executor, and
+code-reviewer. Installation also registers `csx-plan-leader` and
+`csx-start-goal-leader` as workflow leaders. Those two inherit the selected
+top-level `LEADER` model and reasoning effort and are not additional setup-matrix
+roles.
 
 Agent prompts define general, workflow-independent roles. Skills construct each
 subagent assignment with its objective, inputs, scope, required checks,
@@ -206,11 +210,18 @@ strengthen that reliability class.
 For each immutable draft version, Architect runs first. Only Architect `CLEAR`
 allows Critic to review the same version; Architect `BLOCK` skips Critic and
 returns a bounded revision brief. `WATCH` is not a verdict—non-blocking concerns
-are Watch Items inside `CLEAR`. A blocker must be evidence-backed, specific,
-necessary at planning time, minimal, and either an accepted-scope defect or a
-direct change-induced risk. Optional hardening cannot force revision. From draft
-2 onward, every material change is recorded in Scope Delta with stable scope
-authority.
+are Watch Items inside `CLEAR`. Every Planner, Architect, and Critic assignment
+directly carries the accepted-spec path and digest, reliability class, and
+complexity budget.
+
+A blocker must satisfy four explicit conditions: it is an
+`accepted-scope-defect` or `change-induced-risk` with non-null stable
+`scope_authority`; it has concrete evidence and a reachable failure scenario; it
+must be decided at planning time; and its correction is minimal.
+`optional-hardening` cannot force revision. Every material finding uses the same
+scope authority, affected boundary, reachable scenario, evidence,
+plan-time-decision, minimal-fix, and scope-delta fields. From draft 2 onward,
+every material change is recorded in Scope Delta with stable scope authority.
 
 The Plan Leader and Start-Goal Leader checkpoint the current artifact, ledger,
 and next action when context use reaches 35%, and rotate to a fresh leader
@@ -218,7 +229,11 @@ session before the next review or execution unit at 50% or after compaction.
 Successors receive verified artifact paths, versions, and digests rather than a
 transcript. If context metrics are unavailable, leaders use phase-boundary
 rotation instead of guessing percentages. Session rotation does not create a
-new user-visible workflow or transfer artifact-writer ownership.
+new user-visible workflow or transfer artifact-writer ownership. A new
+user-visible top-level thread is reserved for replacing Root when Root can no
+longer recover accepted decisions or authority. A workflow leader only returns
+`ROOT_REPLACEMENT_RECOMMENDED`; Root alone may present the recommendation, and
+the successor Root restores state from verified artifacts.
 
 `csx-start-goal` imports Planner-owned execution goals without merging,
 splitting, reordering, or redesigning them. A direct spec or legacy plan without
@@ -237,12 +252,19 @@ not automatically added to this or a new goal.
 Execution evidence follows one order: focused tests, integration/static checks,
 the first full suite, code and required architecture review, one bounded
 invariant-family rework if needed, affected focused tests, and a final full
-suite only when review or cleanup changed code. Review never starts while tests
+suite only when review rework changed code. Review never starts while tests
 are red. The full suite therefore runs once when review changes no code and at
-most twice when it does; a revision never resets that ceiling. Deslop is not run
-per goal. It runs at most once on the integrated change, and only for observed
-duplication, dead code, unnecessary abstraction, or an evidence-backed cleanup
-finding.
+most twice when it does; a revision never resets that ceiling.
+
+Every approved goal that changes production code applies a goal-scoped Deslop
+gate after focused tests and before the goal checkpoint. Deslop runs at most
+once for that goal. It may be skipped only when the changed code is already
+concise, the goal purpose fits one clear sentence, and no duplication, dead
+code, unnecessary abstraction, or cleanup finding exists. Documentation,
+configuration, and test-only goals record `DESLOP_NOT_APPLICABLE`. Deslop sees
+only the current goal's changed paths and directly affected boundaries.
+Cross-goal cleanup found by cumulative review becomes bounded rework rather
+than a final integrated Deslop pass.
 
 `csx-code-review` treats each blocking defect as an invariant family. A stable
 finding records the invariant, affected producers and consumers, required
@@ -263,6 +285,22 @@ complete plans are exempt; Architect, Critic, Code Reviewer, and Executor
 completion messages use 4 KiB. These are omission-resistant soft limits, not
 permission to drop material evidence or grant read-only specialists workspace
 write access.
+
+### Enforcement and verification boundary
+
+The handoff write fence, single-writer order, scope fence, and context rotation
+are prompt contracts that rely on Codex host controls. CSX does not add a
+separate runtime orchestrator, handoff ACL, writer lease, context-token meter,
+or persistent workflow-state schema for those rules. Canonical workflow state
+tracks plan and goal artifacts; it is not enforcement for `.csx/handoffs` or
+product-source paths.
+
+The Node test suite verifies the exact contract text, setup, installation,
+packaging, and local state behavior. Actual Architect/Critic call order, Root
+replacement, goal-scoped Deslop decisions, artifact digest failures, and host
+write enforcement require the host-level scenarios documented in
+the [host-level scenario runbook](docs/host-e2e-scenarios.md). Passing static
+contract tests alone is not a claim that the host executed those behaviors.
 
 ### End-to-end loop
 

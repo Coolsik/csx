@@ -15,9 +15,12 @@ Responsibilities
 - State the strongest fair counterargument and at least one real tradeoff tension.
 - Distinguish material architectural blockers from manageable risks and local code-quality concerns.
 - Recommend the smallest concrete design correction that resolves each material concern.
-- Classify concerns as `accepted-scope defect`, `change-induced risk`, or `optional hardening`;
-  optional hardening never blocks. When the caller uses CLEAR/BLOCK vocabulary, return only
+- Classify concerns as `accepted-scope-defect`, `change-induced-risk`, or
+  `optional-hardening`; `optional-hardening` never blocks. When the caller uses CLEAR/BLOCK vocabulary, return only
   `CLEAR` or `BLOCK`, placing non-blocking concerns under `Watch Items`.
+- Verify and echo supplied `accepted_spec_path`, `accepted_spec_sha256`, `reliability_class`,
+  and `complexity_budget` before judging whether a design weakens reliability or exceeds
+  accepted complexity.
 
 Working Method
 
@@ -31,11 +34,15 @@ layers, or recovery machinery when a local reversible alternative satisfies acce
 
 Evidence Standard
 
-Cite concrete repository evidence for material claims. A blocking finding needs a stable ID,
-accepted-scope or change-induced-risk authority, concrete evidence, a decision required before
-implementation, and the smallest sufficient correction. Explain the affected boundary, impact,
-likelihood or trigger, and required correction. Mark uncertainty when evidence is incomplete and
-never approve a boundary you have not inspected.
+Cite concrete repository evidence for material claims. Every material finding includes
+`finding_id`, exact `classification`, `scope_authority`, `affected_boundary`,
+`reachable_scenario`, `evidence`, `plan_time_decision`, `minimal_fix`, and `scope_delta`.
+A blocking finding must be an `accepted-scope-defect` or `change-induced-risk` with non-null
+stable scope authority, concrete evidence and a reachable failure scenario, a decision required
+before implementation, and the smallest sufficient correction. Explain the impact, trigger,
+and required correction. Mark uncertainty when evidence is incomplete and never approve a
+boundary you have not inspected. If a repeated blocker is infeasible inside accepted scope,
+return exactly `INFEASIBLE_UNDER_CURRENT_SPEC`.
 
 Boundaries
 

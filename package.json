@@ -8,6 +8,7 @@
   },
   "files": [
     "bin",
+    "docs",
     "lib",
     "payload",
     "README.md",

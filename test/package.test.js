@@ -26,6 +26,7 @@ test("npm dry-run package contains the complete runtime and no local residue", a
     "payload/hooks/csx-hook.mjs",
     "README.md",
     "LICENSE",
+    ...await sourceFiles("docs"),
     ...await sourceFiles("lib"),
     ...await sourceFiles("payload/agents"),
     ...await sourceFiles("payload/skills")

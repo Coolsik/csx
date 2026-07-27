@@ -1,6 +1,6 @@
 ---
 name: csx-start-goal
-description: Execute an explicitly accepted spec or plan as one durable aggregate Codex goal with bounded implementation goals, proportional evidence, scoped deslop cleanup, one final cumulative verification, and a cumulative code-review loop.
+description: Execute an explicitly accepted spec or plan as one durable aggregate Codex goal with bounded implementation goals, proportional evidence, goal-scoped deslop cleanup, one final cumulative verification, and a cumulative code-review loop.
 ---
 
 # csx-start-goal
@@ -14,9 +14,9 @@ entry, one `csx-start-goal-leader` is the logical owner for approved-goal intake
 state, assignment construction, dependency scheduling, control-artifact persistence, targeted
 and cumulative verification, review routing, bounded rework, conditional deslop, and final
 completion. `csx-planner` alone owns execution-goal decomposition, `csx-executor` owns product
-implementation and code-changing rework, `$csx-deslop` owns one conditional integrated cleanup,
-and `$csx-code-review` owns cumulative change review. Do not nest a separate Execution Leader or
-Review Leader.
+implementation and code-changing rework, `$csx-deslop` owns at most one bounded cleanup per
+production-code goal, and `$csx-code-review` owns cumulative change review. Do not nest a
+separate Execution Leader or Review Leader.
 
 ## Canonical Workflow State
 
@@ -80,9 +80,9 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 2. Preserve the accepted input as binding execution context. Preserve its scope, non-goals, constraints, acceptance criteria, decisions, assumptions, Verification Matrix, risks, and stop conditions.
 3. Call `get_goal` before creating anything. Use exactly one aggregate Codex goal for the entire accepted plan. Resume the same goal and artifact when active, stop for a different active goal, and otherwise call `create_goal` once. Persist the created or resumed control artifact before beginning canonical workflow state.
 4. Spawn exactly one `csx-start-goal-leader` with `fork_turns: "none"`, accepted spec and
-   plan paths and digests, the current goal-artifact path and digest, repository marker,
-   decision ledger, approved execution goals, criteria progress, scope fences, and next action.
-   Root does not remain a competing goal-artifact writer.
+   plan paths and digests, the complete Accepted Constraint Envelope, current goal-artifact path
+   and digest, repository marker, decision ledger, approved execution goals, criteria progress,
+   scope fences, and next action. Root does not remain a competing goal-artifact writer.
 
 ## csx-loop Entry Contract
 
@@ -129,16 +129,37 @@ A question, blocker, cancellation, unrelated turn, permission stop, or ended wor
 
 Classify every requirement, test failure, review finding, and rework request as exactly one:
 
-- `accepted-scope defect`: required by the accepted input;
-- `change-induced risk`: a concrete correctness, security, data-integrity, compatibility, or
+- `accepted-scope-defect`: required by the accepted input;
+- `change-induced-risk`: a concrete correctness, security, data-integrity, compatibility, or
   supported-behavior defect introduced or exposed by the change;
-- `optional hardening`: a new extreme, environment, threat model, compatibility promise, or
+- `optional-hardening`: a new extreme, environment, threat model, compatibility promise, or
   robustness improvement outside accepted scope.
 
-Only the first two may block completion. Optional hardening remains a follow-up and cannot
+Only the first two may block completion. `optional-hardening` remains a follow-up and cannot
 become a new criterion, goal, file, mechanism, or review gate. Preserve accepted reliability
 classes. Do not add stronger ordering, persistence, recovery, compatibility, or audit machinery
 without accepted scope authority.
+
+## Accepted Constraint Envelope
+
+Every Planner or Architect assignment created by this skill must include:
+
+```yaml
+accepted_spec_path: .csx/specs/<slug>.md
+accepted_spec_sha256: <digest>
+reliability_class: durable | best-effort | advisory
+complexity_budget:
+  default_goal_budget: 5
+  large_or_high_risk_goal_budget: 10
+  additional_constraints:
+    - <accepted limits>
+```
+
+Preserve per-feature reliability mappings and every accepted complexity limit. Do not infer
+missing values. Planner preserves and echoes the envelope in any execution-goal decomposition;
+Architect echoes it before boundary review. A missing field, digest mismatch, silently
+strengthened reliability mechanism, or unsupported complexity-budget excess is a structured
+blocker.
 
 ## Goal Artifact
 
@@ -165,7 +186,7 @@ first_full_suite | review | bounded_rework | final_verification | complete | blo
 
 ## Attempt Counters
 - Full suite: 0/2
-- Integrated deslop: 0/1
+- Goal deslop passes: <sum; each production-code goal 0/1>
 - Assignment timeout status checks:
 - Same-cause tool retries:
 
@@ -182,6 +203,8 @@ first_full_suite | review | bounded_rework | final_verification | complete | blo
 - Allowed dependencies:
 - Forbidden scope:
 - Focused verification:
+- Production code changed: unknown | yes | no
+- Deslop status: pending | DESLOP_SKIPPED_CONCISE_GOAL | DESLOP_NOT_APPLICABLE | DESLOP_COMPLETED
 - Status: pending | in_progress | implemented | rework | complete | blocked
 
 ## Finding Ledger
@@ -206,9 +229,10 @@ returns `BLOCKED_UNAUTHORIZED_WRITE` and prevents completion.
 2. If an approved plan already contains execution goals, import that decomposition unchanged.
    Start-Goal Leader must not merge, split, reorder, or redesign it.
 3. A direct accepted spec or legacy plan without goals requires one `csx-planner`
-   decomposition before execution. Require bounded results, dependencies, file ownership,
-   criteria, invariants, allowed dependencies, forbidden scope, focused evidence, and stop
-   conditions. Planner remains the only owner of goal structure.
+   decomposition before execution. Pass the complete Accepted Constraint Envelope and require
+   it to be echoed with bounded results, dependencies, file ownership, criteria, invariants,
+   allowed dependencies, forbidden scope, focused evidence, and stop conditions. Planner
+   remains the only owner of goal structure.
 4. Default planning budgets are 5 goals for normal work and 10 for large or high-risk work.
    An excess goal needs an independent ownership, verification, or rollback boundary.
    Strongly coupled work on one file, state machine, or migration boundary is a vertical slice.
@@ -224,8 +248,9 @@ model, cross-module contract, or operational contract.
 
 - Reuse Architect `CLEAR` from an approved pro plan only for the same version, digest, and
   boundaries.
-- Otherwise run one bounded read-only review inside accepted scope.
-- `BLOCK` stops only for an accepted-scope defect or change-induced risk. Non-blocking items
+- Otherwise run one bounded read-only review inside accepted scope with the complete Accepted
+  Constraint Envelope and require Architect to echo it before review.
+- `BLOCK` stops only for an `accepted-scope-defect` or `change-induced-risk`. Non-blocking items
   are `Watch Items` in `CLEAR`; `WATCH` is not a verdict.
 - Localized or non-architectural work records `skipped-not-architectural`.
 
@@ -262,8 +287,10 @@ decisions; Planner owns any approved decomposition change.
 
 For each approved goal, Executor implements within its scope fence and runs its focused tests.
 Start-Goal Leader records changed files, criteria, exact commands, results, failure reasons,
-remaining verification, and residual risk. Independent non-overlapping goals may run in parallel
-with one active owner per path.
+remaining verification, and residual risk. Before sealing that goal checkpoint, apply the
+Goal-Scoped Deslop contract below and record its structured status. Independent non-overlapping
+goals may run in parallel with one active owner per path, but each goal has its own deslop
+decision and at most one cleanup owner.
 
 After all focused tests pass:
 
@@ -272,10 +299,10 @@ After all focused tests pass:
    proportional substitute for documentation/config-only work;
 3. only if all required evidence is green, invoke cumulative code and conditional architecture
    review;
-4. group all accepted-scope and change-induced-risk findings by invariant family into one
-   bounded rework assignment;
+4. group all `accepted-scope-defect` and `change-induced-risk` findings by invariant family
+   into one bounded rework assignment;
 5. run affected focused tests after any code change; and
-6. run one final full suite only when review or conditional deslop changed code.
+6. run one final full suite only when review rework changed code.
 
 Code review must not begin while focused, integration/static, or first full-suite evidence is
 failing. If review makes no code change, the full suite runs exactly once. If code changes, the
@@ -288,18 +315,37 @@ Reviewers do not rerun the full suite. They may run only 1-3 focused reproductio
 concrete finding. Code changes after review invalidate affected evidence and any prior completion
 decision.
 
-## Conditional Integrated Deslop
+## Goal-Scoped Deslop
 
-Never run deslop per goal. Across the integrated change, invoke `$csx-deslop` at most once and
-only when at least one concrete trigger exists:
+Apply the following gate once at the boundary of every approved goal:
 
-- observed duplication or dead code;
-- an unnecessary abstraction at a cited path; or
-- an evidence-backed cleanup finding from review.
+1. If the goal changed no production code, record `DESLOP_NOT_APPLICABLE`.
+2. If the changed code is already concise, the goal's purpose fits one clear sentence, and no
+   duplication, dead code, unnecessary abstraction, or cleanup finding exists, record
+   `DESLOP_SKIPPED_CONCISE_GOAL`.
+3. Otherwise invoke `$csx-deslop` exactly once for that goal, record `DESLOP_COMPLETED`, and run
+   affected focused regression tests before sealing the goal checkpoint.
 
-Change size alone is not a trigger. Deslop cannot change public behavior, schema, authority,
-support, or reliability. Run affected focused regression tests afterward; if deslop changed code
-after the first full suite, it also consumes the one final full-suite run.
+A concise skip must persist this evidence:
+
+```yaml
+deslop_status: DESLOP_SKIPPED_CONCISE_GOAL
+one_line_purpose: <one clear sentence>
+changed_paths:
+  - <goal-owned production path>
+cleanup_findings: none
+```
+
+The deslop assignment contains only the current `goal_id`, one-line outcome, goal-owned changed
+paths, directly affected shared helpers or interfaces, focused tests, and explicit non-goals.
+Never relay prior-goal transcripts or the integrated repository diff. Deslop cannot change
+public behavior, schema, authority, support, or reliability. A goal may never run deslop more
+than once.
+
+The final cumulative review may discover cross-goal duplication or cleanup risk. Handle that as
+one bounded invariant-family rework packet over the cited paths; do not run a final integrated
+deslop or rerun deslop for an earlier goal. Goal-scoped deslop occurs before integration/static
+checks and the first full suite, so it does not consume the post-review final-suite allowance.
 
 ## Bounded Waiting, Retry, and Leader Rotation
 
@@ -325,6 +371,46 @@ successor. If metrics are unavailable, never estimate them: rotate after ten rew
 90 minutes, compaction, or when continuing requires relaying more than 8 KiB. Never overlap
 writers, and never create a user-visible top-level thread merely because Leader context grew.
 
+## Root Replacement Protocol
+
+Leader rotation replaces only the internal Start-Goal Leader while preserving the current Root
+and user-visible thread. A Start-Goal Leader must never create or propose a new top-level thread
+directly. It reports a bounded `ROOT_REPLACEMENT_RECOMMENDED` packet to Root only for one of
+these reason codes:
+
+- `ROOT_DECISION_FIDELITY_LOST`;
+- `PROJECT_IDENTITY_CHANGED`;
+- `UNBOUNDED_TRANSCRIPT_ACCUMULATION`;
+- `MIXED_GOAL_AUTHORITY`; or
+- `INTERNAL_SUCCESSOR_UNAVAILABLE`.
+
+```yaml
+status: ROOT_REPLACEMENT_RECOMMENDED
+reason: ROOT_DECISION_FIDELITY_LOST
+resume:
+  accepted_spec_path: <path>
+  accepted_spec_sha256: <digest>
+  current_artifact_path: <path>
+  current_artifact_sha256: <digest>
+  current_phase: <phase>
+  next_action: <one bounded action>
+  open_findings: []
+  unresolved_user_decisions: []
+```
+
+Only Root may present the recommendation to the user. The user or product creates the new
+thread, and the successor Root restores accepted authority from verified artifacts rather than
+a transcript. Ordinary Leader context growth is never a Root-replacement reason.
+
+## Enforcement Boundary
+
+The goal-artifact write fence, single-writer order, scope fence, and context rotation are prompt
+contracts that rely on host agent controls. This skill does not create a new JS orchestrator,
+product or handoff ACL, writer lease, context-token meter, or persistent workflow-state schema.
+Canonical `csx workflow` state remains limited to the goal artifact and is not path enforcement.
+When the host cannot expose or enforce a capability, record the limitation and use the documented
+fallback; do not claim runtime enforcement.
+
 ## Message and Evidence Budgets
 
 - Explorer and Analyst results: 2 KiB soft limit.
@@ -340,9 +426,10 @@ by verified path instead of relaying it.
 Complete only when:
 
 - every accepted criterion and approved execution goal has current direct evidence;
+- every approved goal records exactly one applicable deslop status, and every
+  `DESLOP_COMPLETED` goal has passing affected focused regression evidence;
 - every focused, integration/static, and required full-suite check passes on the final revision;
 - cumulative code review returns `APPROVE` and required architecture review is `CLEAR`;
-- conditional integrated deslop is passed/no-op or correctly not triggered;
 - no blocking finding, scope expansion, Decision Packet, unauthorized write, or stale digest
   remains; and
 - no product code changed after final evidence.

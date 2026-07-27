@@ -85,22 +85,23 @@ Apply this policy to every direct subagent spawn or resume in this skill.
    - `READY_WITH_ASSUMPTIONS`: preserve every reversible assumption in the decision ledger and continue.
    - `BLOCKED`: resolve user-owned decisions in the root thread. If the blocker cannot be resolved, write a pre-draft BLOCKED artifact and skip Planner, Architect, and Critic. In the Output envelope set Approved Version to `N/A`, Planner Body to `Not created — blocked before drafting`, both review sections to `Not run — blocked before drafting`, and record the exact Analyst blockers.
 3. In the root thread, resolve user-owned decisions exposed by the Analyst. After an answer, resume the same Analyst when possible, or spawn a fresh Analyst with the complete request, evidence, prior result, and answer. Use the replacement readiness result; do not rescore requirements in the root.
-4. Root spawns one `csx-plan-leader` with `fork_turns: "none"`, the accepted spec path and
-   digest, evidence paths, user-decision ledger, run ID, final plan path, and bounded scope
-   authority. Root sends paths and digests, not large originals, and does not concurrently
-   retain another plan handoff writer.
-5. Plan Leader assigns `csx-planner` the accepted inputs. Require `draft_version: 1`, the
-   exact Planner Body Shape, Decision Record, implementation plan, Planner-owned execution
-   goal decomposition, acceptance criteria, Verification Matrix, risks, stop conditions,
-   and deliberate content when applicable. Persist the returned body verbatim as
-   `draft-v001.md` and record its SHA-256 before review.
-6. Plan Leader assigns `csx-architect` the bounded scope authority plus draft path,
-   `draft_version`, and digest. Architect verifies the digest, reads the original directly,
-   and returns exactly `CLEAR` or `BLOCK`:
+4. Root spawns one `csx-plan-leader` with `fork_turns: "none"`, the Accepted Constraint
+   Envelope below, evidence paths, user-decision ledger, run ID, final plan path, and bounded
+   scope authority. Root sends paths and digests, not large originals, and does not
+   concurrently retain another plan handoff writer.
+5. Plan Leader assigns `csx-planner` the accepted inputs and the complete Accepted Constraint
+   Envelope. Require `draft_version: 1`, the exact Planner Body Shape, Decision Record,
+   implementation plan, Planner-owned execution goal decomposition, acceptance criteria,
+   Verification Matrix, risks, stop conditions, and deliberate content when applicable.
+   Persist the returned body verbatim as `draft-v001.md` and record its SHA-256 before review.
+6. Plan Leader assigns `csx-architect` the complete Accepted Constraint Envelope, bounded
+   scope authority, draft path, `draft_version`, and digest. Architect echoes the envelope,
+   verifies the accepted-spec and draft digests, reads the originals directly, and returns
+   exactly `CLEAR` or `BLOCK`:
    - include the strongest counterargument, hidden coupling or boundary risk, and at least
      one real tradeoff tension;
-   - classify every concern as `accepted-scope defect`, `change-induced risk`, or
-     `optional hardening`;
+   - classify every concern as `accepted-scope-defect`, `change-induced-risk`, or
+     `optional-hardening` and use the Common Finding Contract below;
    - place non-blocking concerns under `Watch Items` in a `CLEAR` result; `WATCH` is not a
      verdict;
    - for `BLOCK`, include stable blocker IDs and an Architect-owned minimum
@@ -108,12 +109,13 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 7. Persist the Architect response verbatim and verify its digest. If it is `BLOCK`, record
    Critic status `SKIPPED_ARCHITECT_NOT_CLEAR`; do not call Critic. Give Planner only the
    Architect-owned Revision Brief path and digest for the next version.
-8. Only after Architect `CLEAR`, assign `csx-critic` the same draft path, version, digest,
-   stored Architect-review path and digest, accepted spec and decision paths, and bounded
-   assignment. Critic verifies the originals, simulates two representative implementation
-   steps, checks intent and criterion traceability, and returns `APPROVED`, `REVISE`, or
-   `BLOCKED`. A revision includes a Critic-owned minimum `Revision Brief`; Critic does not
-   reopen architectural scope or merge its brief with an Architect brief.
+8. Only after Architect `CLEAR`, assign `csx-critic` the complete Accepted Constraint
+   Envelope, same draft path, version, digest, stored Architect-review path and digest,
+   accepted spec and decision paths, and bounded assignment. Critic echoes the envelope,
+   verifies the originals, simulates two representative implementation steps, checks intent,
+   criterion traceability, reliability, and complexity limits, and returns `APPROVED`,
+   `REVISE`, or `BLOCKED`. A revision includes a Critic-owned minimum `Revision Brief`;
+   Critic does not reopen architectural scope or merge its brief with an Architect brief.
 9. Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same
    `draft_version` and digest. A missing artifact, mismatched digest, version mismatch, or
    unauthorized write is a structured blocker, never consensus.
@@ -137,6 +139,29 @@ Apply this policy to every direct subagent spawn or resume in this skill.
     modification. Persist each artifact milestone before its canonical workflow checkpoint,
     and persist the terminal artifact before `finish`.
 
+## Accepted Constraint Envelope
+
+Every Planner, Architect, and Critic assignment must include these exact fields:
+
+```yaml
+accepted_spec_path: .csx/specs/<slug>.md
+accepted_spec_sha256: <digest>
+reliability_class: durable | best-effort | advisory
+complexity_budget:
+  default_goal_budget: 5
+  large_or_high_risk_goal_budget: 10
+  additional_constraints:
+    - <accepted limits>
+```
+
+`reliability_class` may be a stable feature-to-class mapping when the accepted spec contains
+multiple material features. `complexity_budget` must preserve every accepted limit rather than
+replace it with only the default goal counts. Plan Leader copies this envelope byte-for-byte
+from accepted authority into each assignment. Planner preserves it in the draft; Architect and
+Critic echo it in their result and compare it with the accepted spec before reviewing. A missing
+field, accepted-spec digest mismatch, silently strengthened reliability mechanism, or unsupported
+complexity-budget excess is a structured blocker rather than an inferred default.
+
 ## Accepted Scope and Blocker Contract
 
 Only the following are scope authority:
@@ -153,21 +178,46 @@ irreversible decisions and recovery, cross-module ownership and order, and verif
 Local reversible helper structure, file naming, equivalent mechanisms, fixture details, and
 test-confirmable implementation choices belong to execution.
 
+### Common Finding Contract
+
+Every material finding uses this exact schema:
+
+```yaml
+finding_id: F001
+classification: accepted-scope-defect | change-induced-risk | optional-hardening
+scope_authority: AC7 | CONSTRAINT:C3 | NON_GOAL:N2 | REGRESSION:<invariant> | null
+affected_boundary: <module, data, permission, migration, or execution boundary>
+reachable_scenario: <concrete execution or failure path>
+evidence: <file, symbol, test, or artifact>
+plan_time_decision: <decision that must be fixed before implementation>
+minimal_fix: <smallest scope-preserving correction>
+scope_delta: none | requires-user-decision
+```
+
+An `accepted-scope-defect` must cite a stable accepted-spec authority ID. A
+`change-induced-risk` must cite `REGRESSION:<invariant>` and explain the causal draft change.
+Without that authority, downgrade the finding to `optional-hardening` or an implementation note.
+`optional-hardening` never blocks and may use `scope_authority: null`.
+
 A blocker must satisfy all four conditions:
 
-1. it is an `accepted-scope defect` or concrete `change-induced risk`;
-2. it cites specific evidence and a failure path;
-3. it must be decided before implementation rather than delegated as a local reversible choice;
-4. its requested correction is the smallest sufficient change.
+1. **Scope-authorized defect or risk:** it is an `accepted-scope-defect` or
+   `change-induced-risk` with a non-null stable `scope_authority`;
+2. **Concrete evidence and reachable scenario:** it cites specific evidence, the affected
+   boundary, a reachable failure condition, and its result;
+3. **Plan-time necessity:** it must be decided before implementation rather than delegated as a
+   local reversible choice; and
+4. **Minimality:** its requested correction is the smallest sufficient scope-preserving change.
 
-Otherwise record it as `optional hardening` in Watch Items. Before requesting new state, storage,
+Otherwise record it as `optional-hardening` in Watch Items. Before requesting new state, storage,
 compatibility, authority, recovery, or migration machinery, reviewers must show why a simpler
 local reversible design cannot satisfy accepted criteria.
 
 Maintain stable blocker IDs in a Blocker Ledger. A blocker first discovered after version 1 must
 identify the draft delta or newly applicable scope evidence that made it observable. Repeating
 the same blocker cannot expand the design indefinitely: narrow it to a minimum correction,
-delegate implementation detail, simplify the design, or declare a specific infeasibility.
+delegate implementation detail, simplify the design, or return exactly
+`INFEASIBLE_UNDER_CURRENT_SPEC`.
 
 ## Versioned Handoff Artifact
 
@@ -227,6 +277,49 @@ cycles, 90 minutes, a compaction, or when continuing would require relaying an o
 8 KiB. Restore the accepted spec, current plan, stable ledger, completed and remaining criteria,
 scope fence, phase, next action, Decision Packet, and writer provenance from paths and digests.
 Leader rotation alone never creates a new user-visible top-level thread.
+
+## Root Replacement Protocol
+
+Leader rotation replaces only the internal Plan Leader while preserving the current Root and
+user-visible thread. A Plan Leader must never create or propose a new top-level thread directly.
+It reports a bounded `ROOT_REPLACEMENT_RECOMMENDED` packet to Root only when one of these reason
+codes is true:
+
+- `ROOT_DECISION_FIDELITY_LOST`: Root cannot recover confirmed decisions or non-goals after
+  compaction;
+- `PROJECT_IDENTITY_CHANGED`: the accepted spec is effectively a different project rather than
+  a revision of the current goal;
+- `UNBOUNDED_TRANSCRIPT_ACCUMULATION`: specialist or implementation detail cannot be separated
+  from Root with a bounded Decision Packet;
+- `MIXED_GOAL_AUTHORITY`: authority from different goals may be applied incorrectly; or
+- `INTERNAL_SUCCESSOR_UNAVAILABLE`: runtime cannot create a transcript-free internal successor.
+
+```yaml
+status: ROOT_REPLACEMENT_RECOMMENDED
+reason: ROOT_DECISION_FIDELITY_LOST
+resume:
+  accepted_spec_path: <path>
+  accepted_spec_sha256: <digest>
+  current_artifact_path: <path>
+  current_artifact_sha256: <digest>
+  current_phase: <phase>
+  next_action: <one bounded action>
+  open_findings: []
+  unresolved_user_decisions: []
+```
+
+Only Root may present this recommendation to the user. The user or product creates the new
+thread; the successor Root restores authority from verified artifacts, not a relayed transcript.
+Ordinary Leader context growth is never a Root-replacement reason.
+
+## Enforcement Boundary
+
+The handoff writer, allowed paths, immutable versions, single-writer order, and context rotation
+above are prompt contracts that rely on host agent controls. This skill does not create a new JS
+orchestrator, handoff ACL, writer lease, context-token meter, or persistent workflow-state
+schema. Canonical `csx workflow` state remains limited to the plan artifact and must not be
+treated as enforcement for `.csx/handoffs`. When the host cannot expose or enforce a capability,
+record that limitation and use the documented fallback; do not claim runtime enforcement.
 
 ## csx-loop Composition Contract
 
@@ -322,10 +415,10 @@ For initial decisions, review-exposed decisions, and final intent reconciliation
 
 ## Proportionality Policy
 
-- Classify proposed work and review feedback as `accepted-scope defect`,
-  `change-induced risk`, or `optional hardening`.
+- Classify proposed work and review feedback as `accepted-scope-defect`,
+  `change-induced-risk`, or `optional-hardening`.
 - Architect and Critic may block only the first two classes. New extremes, environments, threat models, compatibility promises, or general hardening remain follow-ups unless the user explicitly includes them.
-- No blocking verdict may be based only on optional hardening or duplicated verification.
+- No blocking verdict may be based only on `optional-hardening` or duplicated verification.
 - Critic must use the same three concern classes after Architect clearance and must not
   reopen architectural scope.
 - Undefined support boundaries that materially alter the design are user-owned decisions; do not resolve them by selecting an unbounded domain.
@@ -340,6 +433,10 @@ The Planner owns and returns this complete immutable body:
 # Plan: <title>
 
 draft_version: <N>
+accepted_spec_path: <path>
+accepted_spec_sha256: <digest>
+reliability_class: <class or stable feature-to-class mapping>
+complexity_budget: <accepted budget>
 
 ## Decisions and Assumptions
 ### User-confirmed Decisions

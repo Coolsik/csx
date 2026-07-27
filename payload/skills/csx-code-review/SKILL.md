@@ -64,7 +64,11 @@ Always spawn `csx-code-reviewer`. Its assignment must include the user request, 
 - two-stage review: specification and scope compliance before code quality;
 - correctness, security, unsafe data handling, error handling, edge cases, regressions, tests, maintainability, and user-facing or documentation impact;
 - findings ordered `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, each with path, line, impact, trigger, and concrete fix;
-- classification of every finding as `accepted-scope defect`, `change-induced safety/regression`, or `optional hardening`;
+- classification of every finding as exactly `accepted-scope-defect`,
+  `change-induced-risk`, or `optional-hardening`;
+- the common fields `finding_id`, `classification`, `scope_authority`, `affected_boundary`,
+  `reachable_scenario`, `evidence`, `plan_time_decision`, `minimal_fix`, and `scope_delta`
+  for every material finding;
 - one stable finding ID and the fields `invariant`, `affected_producers`,
   `affected_consumers`, `required_sweep`, `inspected_paths`, and `uninspected_boundaries` for
   every blocking finding;
@@ -74,9 +78,37 @@ Spawn `csx-architect` only when the final diff introduces, changes, or departs f
 
 Record `csx-architect: skipped-trivial` when no unresolved architectural boundary above exists. A current architecture review may be reused only when it covers the same accepted scope, boundary, and evidence revision.
 
-Only `accepted-scope defect` and `change-induced safety/regression` findings may produce `REQUEST CHANGES` or `BLOCK`. `optional hardening` and unrelated refactoring are non-blocking follow-up material. A security or integrity defect introduced by the change is not optional merely because the original request did not name the attack or failure mode.
+Only `accepted-scope-defect` and `change-induced-risk` findings may produce `REQUEST CHANGES`
+or `BLOCK`. An `accepted-scope-defect` requires a stable accepted-spec authority ID; a
+`change-induced-risk` requires `REGRESSION:<invariant>`. Without non-null scope authority,
+downgrade it to `optional-hardening` or a non-blocking implementation note.
+`optional-hardening` and unrelated refactoring are non-blocking follow-up material. A security
+or integrity defect introduced by the change is not optional merely because the original
+request did not name the attack or failure mode.
 
 Use unique task names, `fork_turns: "none"`, lane-specific stop conditions, and the output discipline above. Wait for every required lane. If `csx-code-reviewer`, or a required Architect lane, is unavailable, ask the user to rerun `csx install`; do not report `APPROVE`. Report `COMMENT` with `required csx role unavailable`.
+
+## Common Finding Contract
+
+Every material finding uses this exact schema:
+
+```yaml
+finding_id: F001
+classification: accepted-scope-defect | change-induced-risk | optional-hardening
+scope_authority: AC7 | CONSTRAINT:C3 | NON_GOAL:N2 | REGRESSION:<invariant> | null
+affected_boundary: <module, data, permission, migration, or execution boundary>
+reachable_scenario: <concrete execution or failure path>
+evidence: <file, symbol, test, diff, or artifact>
+plan_time_decision: <required pre-implementation decision or none-local-correction>
+minimal_fix: <smallest scope-preserving correction>
+scope_delta: none | requires-user-decision
+```
+
+For an implementation defect that needs no new product decision,
+`plan_time_decision: none-local-correction` records that it remains bounded Executor rework.
+The Plan-Pro four-condition blocker gate applies to planning review; execution review may still
+block a concrete accepted-scope or change-induced implementation defect without inventing a new
+plan-time decision.
 
 ## Invariant-Family Sweep
 
@@ -118,8 +150,15 @@ Reconcile duplicate findings without weakening their severity or required fix. T
 ## Findings
 - Finding ID:
   Severity: CRITICAL/HIGH/MEDIUM/LOW
-  Classification: accepted-scope defect / change-induced safety/regression / optional hardening
+  Classification: accepted-scope-defect / change-induced-risk / optional-hardening
+  Scope authority:
   Location: file:line
+  Affected boundary:
+  Reachable scenario:
+  Evidence:
+  Plan-time decision:
+  Minimal fix:
+  Scope delta: none / requires-user-decision
   Invariant:
   Affected producers:
   Affected consumers:

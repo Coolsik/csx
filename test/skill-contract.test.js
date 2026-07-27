@@ -534,7 +534,7 @@ test("csx-plan-pro delegates all specialist judgments and binds consensus to one
   assert.match(skill, /If an accepted final csx spec is supplied/);
   assert.match(skill, /Reuse current evidence\s+instead of repeating discovery/);
   assert.match(skill, /Require `draft_version: 1`/);
-  assert.match(skill, /assigns `csx-architect` the bounded scope authority plus draft path/);
+  assert.match(skill, /assigns `csx-architect` the complete Accepted Constraint Envelope, bounded\s+scope authority, draft path/);
   assert.match(skill, /Only after Architect `CLEAR`, assign `csx-critic`/);
   assert.match(skill, /Consensus requires Architect `CLEAR` and Critic `APPROVED` for the same/);
   assert.match(skill, /increment `draft_version` by exactly one/);
@@ -586,16 +586,62 @@ test("csx-plan-pro uses a single-writer sequential artifact gate with bounded bl
   assert.doesNotMatch(skill, /accepted material improvement requires revision/);
 
   for (const classification of [
-    "accepted-scope defect",
-    "change-induced risk",
-    "optional hardening",
+    "accepted-scope-defect",
+    "change-induced-risk",
+    "optional-hardening",
   ]) {
     assert.match(skill, new RegExp(classification));
   }
+  for (const field of [
+    "finding_id",
+    "classification",
+    "scope_authority",
+    "affected_boundary",
+    "reachable_scenario",
+    "evidence",
+    "plan_time_decision",
+    "minimal_fix",
+    "scope_delta",
+  ]) {
+    assert.match(skill, new RegExp(field));
+    assert.match(architect, new RegExp(field));
+    assert.match(critic, new RegExp(field));
+  }
   assert.match(skill, /A blocker must satisfy all four conditions/);
+  const blockerContract = skill.slice(
+    skill.indexOf("A blocker must satisfy all four conditions"),
+    skill.indexOf("Maintain stable blocker IDs"),
+  );
+  assert.equal((blockerContract.match(/^\d+\./gm) ?? []).length, 4);
+  for (const condition of [
+    "Scope-authorized defect or risk",
+    "Concrete evidence and reachable scenario",
+    "Plan-time necessity",
+    "Minimality",
+  ]) {
+    assert.match(blockerContract, new RegExp(condition));
+  }
+  assert.match(skill, /non-null stable `scope_authority`/);
   assert.match(skill, /stable blocker IDs/);
   assert.match(skill, /draft delta or newly applicable scope evidence/);
-  assert.match(skill, /simplify the design, or declare a specific infeasibility/);
+  assert.match(skill, /`INFEASIBLE_UNDER_CURRENT_SPEC`/);
+  assert.match(architect, /`INFEASIBLE_UNDER_CURRENT_SPEC`/);
+  assert.match(critic, /`INFEASIBLE_UNDER_CURRENT_SPEC`/);
+
+  for (const field of [
+    "accepted_spec_path",
+    "accepted_spec_sha256",
+    "reliability_class",
+    "complexity_budget",
+  ]) {
+    assert.match(skill, new RegExp(field));
+    assert.match(leader, new RegExp(field));
+    assert.match(planner, new RegExp(field));
+    assert.match(architect, new RegExp(field));
+    assert.match(critic, new RegExp(field));
+  }
+  assert.match(skill, /Planner preserves it in the draft/);
+  assert.match(skill, /Architect and\s+Critic echo it in their result/);
 
   assert.match(skill, /\.csx\/handoffs\/<run-id>\//);
   assert.match(skill, /manifest\.json/);
@@ -620,6 +666,14 @@ test("csx-plan-pro uses a single-writer sequential artifact gate with bounded bl
   assert.match(skill, /never estimate a ratio/);
   assert.match(skill, /Never overlap writers/);
   assert.match(skill, /Leader rotation alone never creates a new user-visible top-level thread/);
+  assert.match(skill, /## Root Replacement Protocol/);
+  assert.match(skill, /`ROOT_REPLACEMENT_RECOMMENDED`/);
+  assert.match(skill, /Only Root may present this recommendation to the user/);
+  assert.match(leader, /`ROOT_REPLACEMENT_RECOMMENDED`/);
+  assert.match(leader, /only Root may recommend it to the user/);
+  assert.match(skill, /## Enforcement Boundary/);
+  assert.match(skill, /does not create a new JS\s+orchestrator/);
+  assert.match(leader, /do\s+not create a new runtime orchestrator/);
 });
 
 test("canonical workflows persist artifacts before fail-open token-CAS state milestones", async () => {
@@ -663,7 +717,7 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
 
   assert.match(skill, /Use exactly one aggregate Codex goal for the entire accepted plan/);
   assert.match(skill, /Spawn exactly one `csx-start-goal-leader` with `fork_turns: "none"`/);
-  assert.match(skill, /Do not nest a separate Execution Leader or\s+Review Leader/);
+  assert.match(skill, /Do not nest a\s+separate Execution Leader or Review Leader/);
   assert.match(leader, /sandbox_mode = "workspace-write"/);
   assert.doesNotMatch(leader, /^model\s*=/m);
   assert.doesNotMatch(leader, /^model_reasoning_effort\s*=/m);
@@ -672,11 +726,20 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
   assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE`/);
 
   for (const classification of [
-    "accepted-scope defect",
-    "change-induced risk",
-    "optional hardening",
+    "accepted-scope-defect",
+    "change-induced-risk",
+    "optional-hardening",
   ]) {
     assert.match(skill, new RegExp(classification));
+  }
+  for (const field of [
+    "accepted_spec_path",
+    "accepted_spec_sha256",
+    "reliability_class",
+    "complexity_budget",
+  ]) {
+    assert.match(skill, new RegExp(field));
+    assert.match(leader, new RegExp(field));
   }
   assert.match(skill, /Preserve accepted reliability\s+classes/);
   assert.match(skill, /import that decomposition unchanged/);
@@ -702,7 +765,7 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
   const integration = skill.indexOf("run the accepted integration and static checks", focused);
   const firstFull = skill.indexOf("run the first full suite", focused);
   const review = skill.indexOf("invoke cumulative code", focused);
-  const rework = skill.indexOf("group all accepted-scope", focused);
+  const rework = skill.indexOf("group all `accepted-scope-defect`", focused);
   const finalFull = skill.indexOf("run one final full suite", focused);
   assert.ok(
     focused >= 0 &&
@@ -720,12 +783,25 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
   assert.match(skill, /Reviewers do not rerun the full suite/);
   assert.match(skill, /only 1-3 focused reproductions/);
 
-  assert.match(skill, /Never run deslop per goal/);
-  assert.match(skill, /invoke `\$csx-deslop` at most once/);
-  assert.match(skill, /Change size alone is not a trigger/);
-  assert.match(skill, /observed duplication or dead code/);
-  assert.match(skill, /unnecessary abstraction/);
-  assert.match(skill, /evidence-backed cleanup finding/);
+  assert.match(skill, /## Goal-Scoped Deslop/);
+  assert.match(skill, /boundary of every approved goal/);
+  assert.match(skill, /`DESLOP_NOT_APPLICABLE`/);
+  assert.match(skill, /`DESLOP_SKIPPED_CONCISE_GOAL`/);
+  assert.match(skill, /`DESLOP_COMPLETED`/);
+  for (const status of [
+    "DESLOP_NOT_APPLICABLE",
+    "DESLOP_SKIPPED_CONCISE_GOAL",
+    "DESLOP_COMPLETED",
+  ]) {
+    assert.match(leader, new RegExp(status));
+  }
+  assert.match(skill, /purpose fits one clear sentence/);
+  assert.match(skill, /goal-owned changed\s+paths/);
+  assert.match(skill, /Never relay prior-goal transcripts or the integrated repository diff/);
+  assert.match(skill, /A goal may never run deslop more\s+than once/);
+  assert.match(leader, /at most once for that goal/);
+  assert.match(leader, /not another aggregate deslop pass/);
+  assert.match(skill, /do not run a final integrated\s+deslop/);
 
   assert.match(skill, /Do not repeatedly short-poll agents/);
   assert.match(skill, /At timeout, send one status check/);
@@ -737,9 +813,16 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
   assert.match(skill, /If metrics are unavailable, never estimate them/);
   assert.match(skill, /Never overlap\s+writers/);
   assert.match(skill, /never create a user-visible top-level thread merely because Leader context grew/);
+  assert.match(skill, /## Root Replacement Protocol/);
+  assert.match(skill, /`ROOT_REPLACEMENT_RECOMMENDED`/);
+  assert.match(skill, /Only Root may present the recommendation to the user/);
+  assert.match(leader, /`ROOT_REPLACEMENT_RECOMMENDED`/);
+  assert.match(leader, /only Root may recommend it to the user/);
+  assert.match(skill, /## Enforcement Boundary/);
+  assert.match(leader, /do\s+not create a new runtime orchestrator/);
 
   assert.match(skill, /Full suite: 0\/2/);
-  assert.match(skill, /Integrated deslop: 0\/1/);
+  assert.match(skill, /Goal deslop passes: <sum; each production-code goal 0\/1>/);
   assert.match(skill, /recorded as `legacy baseline`/);
   assert.match(skill, /call `update_goal` with `complete` exactly once/);
   assert.doesNotMatch(skill, /csx-verifier/);
@@ -772,12 +855,25 @@ test("csx-code-review always delegates code review and conditionally delegates a
   assert.match(skill, /Always spawn `csx-code-reviewer`/);
   assert.match(skill, /include it in every required reviewer assignment and require each result plus the composite result to echo it/);
   assert.match(skill, /missing or mismatched revision is stale review evidence/);
-  assert.match(skill, /classification of every finding as `accepted-scope defect`/);
+  assert.match(skill, /classification of every finding as exactly `accepted-scope-defect`/);
   assert.match(skill, /Spawn `csx-architect` only when the final diff introduces, changes, or departs from/);
   assert.match(skill, /Diff size, file count, or ordinary cross-module call flow alone do not require the lane/);
-  assert.match(skill, /Only `accepted-scope defect` and `change-induced safety\/regression` findings may produce/);
-  assert.match(skill, /`optional hardening` and unrelated refactoring are non-blocking follow-up material/);
-  assert.match(skill, /Classification: accepted-scope defect \/ change-induced safety\/regression \/ optional hardening/);
+  assert.match(skill, /Only `accepted-scope-defect` and `change-induced-risk` findings may produce/);
+  assert.match(skill, /`optional-hardening` and unrelated refactoring are non-blocking follow-up material/);
+  assert.match(skill, /Classification: accepted-scope-defect \/ change-induced-risk \/ optional-hardening/);
+  for (const field of [
+    "finding_id",
+    "classification",
+    "scope_authority",
+    "affected_boundary",
+    "reachable_scenario",
+    "evidence",
+    "plan_time_decision",
+    "minimal_fix",
+    "scope_delta",
+  ]) {
+    assert.match(skill, new RegExp(field));
+  }
   assert.match(skill, /`APPROVE`: Code Reviewer returns `APPROVE`; Architect is `CLEAR` or was validly skipped/);
   assert.match(skill, /must not perform either specialist review itself/);
 });
@@ -815,15 +911,28 @@ test("csx-code-review completes blocking findings by invariant family after gree
   assert.match(skill, /do not create a new blocker ID/);
   assert.match(skill, /one bounded rework\s+packet per invariant family/);
   assert.match(skill, /`WATCH` is not a verdict/);
-  assert.match(skill, /optional hardening` and unrelated refactoring are non-blocking/);
+  assert.match(skill, /`optional-hardening` and unrelated refactoring are non-blocking/);
   assert.match(skill, /4 KiB soft limit/);
   assert.match(skill, /never grant a read-only reviewer general\s+workspace write access/);
 
   assert.match(reviewer, /Never rerun the full suite/);
   assert.match(reviewer, /only 1-3 focused reproductions in total/);
-  assert.match(reviewer, /Retain the stable ID through rework/);
+  assert.match(reviewer, /Retain the stable ID\s+through rework/);
   assert.match(reviewer, /new blocker for the same\s+invariant requires a draft or code delta/);
-  assert.match(reviewer, /Optional hardening and unrelated refactoring are non-blocking/);
+  assert.match(reviewer, /`optional-hardening` and unrelated refactoring are non-blocking/);
+  for (const field of [
+    "finding_id",
+    "classification",
+    "scope_authority",
+    "affected_boundary",
+    "reachable_scenario",
+    "evidence",
+    "plan_time_decision",
+    "minimal_fix",
+    "scope_delta",
+  ]) {
+    assert.match(reviewer, new RegExp(field));
+  }
   assert.match(reviewer, /4 KiB soft limit/);
   assert.match(reviewer, /Remain read-only/);
   assert.match(reviewer, /active Leader remains\s+the single artifact writer/);
@@ -844,11 +953,17 @@ test("README documents clarity gates, workflow leaders, and bounded execution re
   assert.match(compact, /one Plan Leader as the only handoff and final-plan writer/);
   assert.match(compact, /Only Architect `CLEAR` allows Critic/);
   assert.match(compact, /`WATCH` is not a verdict/);
-  assert.match(compact, /evidence-backed, specific, necessary at planning time, minimal/);
+  assert.match(compact, /four explicit conditions/);
+  assert.match(compact, /non-null stable `scope_authority`/);
+  assert.match(compact, /accepted-spec path and digest, reliability class, and complexity budget/);
   assert.match(compact, /Plan Leader and Start-Goal Leader checkpoint/);
   assert.match(compact, /context use reaches 35%/);
   assert.match(compact, /at 50% or after compaction/);
   assert.match(compact, /inherit the selected `LEADER` pair/);
+  assert.match(compact, /seven configurable specialists/);
+  assert.match(compact, /also registers `csx-plan-leader` and `csx-start-goal-leader`/);
+  assert.match(compact, /`ROOT_REPLACEMENT_RECOMMENDED`/);
+  assert.match(compact, /Root alone may present the recommendation/);
 
   assert.match(compact, /Planner-owned execution goals without merging, splitting, reordering, or redesigning/);
   assert.match(compact, /normal complexity budget is five goals/);
@@ -856,7 +971,11 @@ test("README documents clarity gates, workflow leaders, and bounded execution re
   assert.match(compact, /`SCOPE_EXPANSION_REQUIRED`/);
   assert.match(compact, /focused tests, integration\/static checks, the first full suite/);
   assert.match(compact, /full suite therefore runs once[\s\S]*at most twice/);
-  assert.match(compact, /Deslop is not run per goal/);
+  assert.match(compact, /goal-scoped Deslop gate/);
+  assert.match(compact, /Deslop runs at most once for that goal/);
+  assert.match(compact, /purpose fits one clear sentence/);
+  assert.match(compact, /`DESLOP_NOT_APPLICABLE`/);
+  assert.match(compact, /rather than a final integrated Deslop pass/);
 
   assert.match(compact, /treats each blocking defect as an invariant family/);
   assert.match(compact, /affected producers and consumers/);
@@ -867,6 +986,34 @@ test("README documents clarity gates, workflow leaders, and bounded execution re
   assert.match(compact, /one status check and at most one non-overlapping replacement/);
   assert.match(compact, /2 KiB soft limit/);
   assert.match(compact, /use 4 KiB/);
+  assert.match(compact, /prompt contracts that rely on Codex host controls/);
+  assert.match(compact, /Passing static contract tests alone is not a claim/);
+});
+
+test("host-level scenario runbook covers behavior that static contracts cannot prove", async () => {
+  const runbook = await readFile(resolve(root, "docs", "host-e2e-scenarios.md"), "utf8");
+
+  for (const scenario of [
+    "H01 — Architect BLOCK skips Critic",
+    "H02 — Accepted Constraint Envelope blocks unsupported complexity",
+    "H03 — Missing scope authority cannot block",
+    "H04 — Repeated infeasible blocker converges",
+    "H05 — Concise production-code goal skips Deslop",
+    "H06 — Non-concise production-code goal runs Deslop once",
+    "H07 — Cross-goal cleanup stays bounded",
+    "H08 — Leader rotation does not replace Root",
+    "H09 — Root fidelity loss recommends Root replacement",
+    "H10 — Artifact failure and host enforcement remain explicit",
+  ]) {
+    assert.match(runbook, new RegExp(scenario));
+  }
+
+  assert.match(runbook, /A passing contract test\s+does not mark a scenario passed/);
+  assert.match(runbook, /Do not record a scenario as passed without the listed direct evidence/);
+  assert.match(runbook, /`ROOT_REPLACEMENT_RECOMMENDED`/);
+  assert.match(runbook, /`DESLOP_SKIPPED_CONCISE_GOAL`/);
+  assert.match(runbook, /`DESLOP_COMPLETED`/);
+  assert.match(runbook, /`INFEASIBLE_UNDER_CURRENT_SPEC`/);
 });
 
 test("spec and planning workflows keep support and verification proportional", async () => {
@@ -883,7 +1030,7 @@ test("spec and planning workflows keep support and verification proportional", a
   assert.match(plan, /one full suite in the primary environment plus bounded smoke coverage/);
   assert.match(plan, /reject duplicated verification rows and scope-expanding hardening/);
   assert.match(planPro, /Architect and Critic may block only the first two classes/);
-  assert.match(planPro, /[Nn]o blocking verdict may be based only on optional hardening or duplicated verification/);
+  assert.match(planPro, /[Nn]o blocking verdict may be based only on `optional-hardening` or duplicated verification/);
   assert.match(planPro, /Critic must use the same three concern classes/);
   assert.match(planPro, /Default to one primary-environment full suite plus affected-environment smoke checks/);
 });

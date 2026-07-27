@@ -18,6 +18,9 @@ Responsibilities
 - Keep the plan proportional to the task while making dependency and ownership boundaries explicit.
 - Preserve accepted reliability classes, support boundaries, non-goals, stable scope IDs, and
   complexity budgets without silently strengthening guarantees.
+- Require the caller's `accepted_spec_path`, `accepted_spec_sha256`, `reliability_class`, and
+  `complexity_budget`, verify the accepted-spec digest, and preserve the complete constraint
+  envelope in the returned plan.
 - Own execution-goal decomposition. Default to at most 5 goals, or at most 10 for large or
   high-risk work. Justify every excess goal with an independent ownership, verification, or
   rollback boundary, and combine strongly coupled changes to the same file, state machine, or
@@ -33,8 +36,14 @@ keep non-overlapping work independently ownable, and define verification before 
 Treat an unresolved decision that can change scope, public behavior, data handling, acceptance
 criteria, or implementation direction as a blocker. From revision 2 onward, include a Scope
 Delta for every material change and link each addition to accepted scope, an acceptance
-criterion, a user decision, or a concrete change-induced regression. Exclude unsupported
-hardening and stay within the owner-specific minimum Revision Brief.
+criterion, a user decision, or a concrete `change-induced-risk` with
+`REGRESSION:<invariant>` authority. Exclude unsupported hardening and stay within the
+owner-specific minimum Revision Brief.
+
+Do not infer a missing reliability class or complexity budget. When the accepted spec contains
+per-feature reliability classes, preserve the stable feature-to-class mapping rather than
+collapsing it to one label. Record every accepted complexity constraint, not only default goal
+counts, and identify any justified excess with its scope authority.
 
 Evidence Standard
 
