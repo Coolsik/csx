@@ -43,15 +43,13 @@ Project installation writes skills to `.agents/skills`, agents and hooks to
 `.codex`, and a managed block to `.codex/config.toml`. Without
 `--project-root`, csx installs into the directory where the command is run.
 Git is not required. Project installation never changes the global Codex home.
-New installations use the `Balanced` role preset. This sets the selected
-scope's top-level `model` and `model_reasoning_effort` for the Leader as well as
-the seven agent files. Any previous Leader assignments are retained in the
-installation receipt and restored by `csx uninstall`.
-
-The installed `csx-plan-leader` and `csx-start-goal-leader` definitions do not
-pin their own model or reasoning effort. Their top-level sessions inherit the
-selected `LEADER` pair; setup continues to configure only that pair and the
-seven specialist roles.
+New installations use the `Balanced` role preset. This pins the logical
+`LEADER` pair in both `csx-plan-leader` and `csx-start-goal-leader`, and pins
+the seven specialist agent files. Root's top-level `model` and
+`model_reasoning_effort` remain user-owned and are never selected by csx.
+Upgrading an older csx installation that managed those Root assignments
+restores their saved original values once and removes the old ownership
+metadata.
 
 For the selected scope, installation also enables
 `features.default_mode_request_user_input` so `csx-spec`, `csx-plan`, and
@@ -128,13 +126,13 @@ Before commit, setup validates the final pairs against a freshly discovered
 Codex app-server catalog, rejects duplicate preset matrices, and rejects role
 or custom-preset drift. Receipt
 metadata drift is reconciled without rewriting unchanged role settings. Setup
-writes only selected receipt-owned agent files and Leader config, the complete
-effective-matrix receipt when needed, and approved global custom-preset
-metadata in one transaction. Validation errors write nothing, and any
-transactional failure rolls back the selected changes before the error is
-reported. If the role matrix and receipt already match and no custom save was
-requested, it reports `Setup already matches the selected matrix.` without
-writing agent files.
+writes only selected receipt-owned specialist files and both workflow Leader
+files, the complete effective-matrix receipt when needed, and approved global
+custom-preset metadata in one transaction. It never writes Root's model pair.
+Validation errors write nothing, and any transactional failure rolls back the
+selected changes before the error is reported. If the role matrix and receipt
+already match and no custom save was requested, it reports
+`Setup already matches the selected matrix.` without writing agent files.
 Hostile text in Apply-time fresh-catalog drift is escaped only after terminal
 cleanup, and the rejected operation commits nothing.
 
@@ -161,9 +159,9 @@ including `csx-deslop`, use explicit invocation rather than implicit routing.
 Installed custom agents are namespaced `csx-*`. Setup exposes seven configurable
 specialists: explorer, analyst, planner, architect, critic, executor, and
 code-reviewer. Installation also registers `csx-plan-leader` and
-`csx-start-goal-leader` as workflow leaders. Those two inherit the selected
-top-level `LEADER` model and reasoning effort and are not additional setup-matrix
-roles.
+`csx-start-goal-leader` as workflow leaders. Setup treats the two definitions as
+one logical `LEADER` role and writes the selected pair to both. Root is
+configured independently and is not a setup-matrix role.
 
 Agent prompts define general, workflow-independent roles. Skills construct each
 subagent assignment with its objective, inputs, scope, required checks,

@@ -78,7 +78,7 @@ const transactionApi = {
 const install = (options) => installCore({ ...options, transactionApi });
 const uninstall = (options) => uninstallCore({ ...options, transactionApi });
 
-test("global install applies Balanced Leader while preserving the original for uninstall", async () => {
+test("global install preserves Root settings and applies Balanced to workflow Leaders", async () => {
   const home = await temporary("global home ");
   const codex = join(home, ".codex");
   await mkdir(codex, { recursive: true });
@@ -101,18 +101,18 @@ test("global install applies Balanced Leader while preserving the original for u
     const path = join(codex, "agents", `${name}.toml`);
     assert.equal(existsSync(path), true);
     const definition = await readFile(path, "utf8");
-    assert.doesNotMatch(definition, /^model\s*=/m);
-    assert.doesNotMatch(definition, /^model_reasoning_effort\s*=/m);
+    assert.match(definition, /^model = "gpt-5\.6-luna"$/m);
+    assert.match(definition, /^model_reasoning_effort = "xhigh"$/m);
     assert.equal(receipt.files.includes(path), true);
   }
   assert.deepEqual(Object.keys(receipt.setupAgentMatrix.roles).sort(), ["leader", ...AGENT_NAMES].sort());
+  assert.equal(receipt.leaderConfig, undefined);
   assert.equal(existsSync(join(codex, "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
   const config = await readFile(join(codex, "config.toml"), "utf8");
-  assert.match(config, new RegExp(LEADER_MANAGED_START));
-  assert.match(config, new RegExp(LEADER_MANAGED_END));
-  assert.match(config, /model = "gpt-5\.6-luna"/);
-  assert.match(config, /model_reasoning_effort = "max"/);
-  assert.doesNotMatch(config, /model = "example"/);
+  assert.doesNotMatch(config, new RegExp(LEADER_MANAGED_START));
+  assert.doesNotMatch(config, new RegExp(LEADER_MANAGED_END));
+  assert.match(config, /^model = "example"$/m);
+  assert.doesNotMatch(config, /^model_reasoning_effort\s*=/m);
   assert.match(config, new RegExp(MANAGED_START));
   assert.match(config, /\[\[hooks\.UserPromptSubmit\]\]/);
   assert.match(config, /user-prompt-submit/);
@@ -126,10 +126,53 @@ test("global install applies Balanced Leader while preserving the original for u
   assert.match(config, /\[features\]\ndefault_mode_request_user_input = true/);
 
   await uninstall({ cwd: join(home, "unrelated"), env: { HOME: home } });
-  assert.equal(await readFile(join(codex, "config.toml"), "utf8"), 'model = "example"\n');
+  assert.equal((await readFile(join(codex, "config.toml"), "utf8")).trim(), 'model = "example"');
 });
 
-test("repeat install migrates an exact legacy verifier receipt and restores the old Leader on uninstall", async () => {
+test("repeat install migrates managed Root defaults into workflow Leader files", async () => {
+  const root = await temporary("managed root migration ");
+  const configPath = join(root, ".codex", "config.toml");
+  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
+  await install({ scope: "project", projectRoot: root });
+
+  const leaderRegion = new RegExp(
+    `${escapeRegExp(LEADER_MANAGED_START)}[\\s\\S]*?${escapeRegExp(LEADER_MANAGED_END)}\\n*`
+  );
+  const currentConfig = await readFile(configPath, "utf8");
+  const withoutRoot = currentConfig
+    .replace(leaderRegion, "")
+    .replace(/^model(?:_reasoning_effort)?\\s*=.*\\n?/gm, "");
+  await writeFile(
+    configPath,
+    `${LEADER_MANAGED_START}\nmodel = "legacy-managed"\nmodel_reasoning_effort = "max"\n${LEADER_MANAGED_END}\n\n${withoutRoot}`
+  );
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  receipt.leaderConfig = {
+    version: 1,
+    originals: {
+      model: 'model = "root-choice"',
+      model_reasoning_effort: 'model_reasoning_effort = "high"'
+    }
+  };
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+
+  await install({ scope: "project", projectRoot: root });
+
+  const migratedConfig = await readFile(configPath, "utf8");
+  assert.doesNotMatch(migratedConfig, leaderRegion);
+  assert.match(migratedConfig, /^model = "root-choice"$/m);
+  assert.match(migratedConfig, /^model_reasoning_effort = "high"$/m);
+  const migratedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.equal(migratedReceipt.leaderConfig, undefined);
+  for (const name of WORKFLOW_LEADER_NAMES) {
+    const definition = await readFile(join(root, ".codex", "agents", `${name}.toml`), "utf8");
+    const pair = migratedReceipt.setupAgentMatrix.roles.leader;
+    assert.match(definition, new RegExp(`^model = "${escapeRegExp(pair.model)}"$`, "m"));
+    assert.match(definition, new RegExp(`^model_reasoning_effort = "${escapeRegExp(pair.reasoning)}"$`, "m"));
+  }
+});
+
+test("repeat install migrates an exact legacy verifier receipt and preserves Root on uninstall", async () => {
   const root = await temporary("legacy verifier migration ");
   const configPath = join(root, ".codex", "config.toml");
   const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
@@ -139,10 +182,8 @@ test("repeat install migrates an exact legacy verifier receipt and restores the 
   const leaderRegion = new RegExp(
     `${escapeRegExp(LEADER_MANAGED_START)}[\\s\\S]*?${escapeRegExp(LEADER_MANAGED_END)}\\n*`
   );
-  let config = (await readFile(configPath, "utf8")).replace(
-    leaderRegion,
-    'model = "legacy-user-model"\nmodel_reasoning_effort = "high"\n\n'
-  );
+  let config = (await readFile(configPath, "utf8")).replace(leaderRegion, "");
+  config = `model = "legacy-user-model"\nmodel_reasoning_effort = "high"\n\n${config}`;
   config = config.replace(
     "[[hooks.SessionStart]]",
     `[agents.${LEGACY_VERIFIER_NAME}]\nconfig_file = "./agents/${LEGACY_VERIFIER_NAME}.toml"\n\n[[hooks.SessionStart]]`
@@ -169,8 +210,14 @@ test("repeat install migrates an exact legacy verifier receipt and restores the 
   assert.equal(existsSync(verifierPath), false);
   const upgradedConfig = await readFile(configPath, "utf8");
   assert.doesNotMatch(upgradedConfig, /\[agents\.csx-verifier\]/);
-  assert.match(upgradedConfig, /model = "gpt-5\.6-luna"/);
-  assert.match(upgradedConfig, /model_reasoning_effort = "max"/);
+  assert.doesNotMatch(upgradedConfig, new RegExp(LEADER_MANAGED_START));
+  assert.match(upgradedConfig, /^model = "legacy-user-model"$/m);
+  assert.match(upgradedConfig, /^model_reasoning_effort = "high"$/m);
+  for (const name of WORKFLOW_LEADER_NAMES) {
+    const leader = await readFile(join(root, ".codex", "agents", `${name}.toml`), "utf8");
+    assert.match(leader, /^model = "gpt-5\.6-luna"$/m);
+    assert.match(leader, /^model_reasoning_effort = "xhigh"$/m);
+  }
   const upgradedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
   assert.equal(upgradedReceipt.files.includes(verifierPath), false);
   assert.deepEqual(upgradedReceipt.setupAgentMatrix.roles.leader, legacy.leader);
@@ -814,9 +861,13 @@ test("repeat install retains valid receipt setup agent selections", async () => 
   const agent = await readFile(join(root, ".codex", "agents", "csx-explorer.toml"), "utf8");
   assert.match(agent, /model = "saved-model"/);
   assert.match(agent, /model_reasoning_effort = "saved-effort"/);
+  for (const name of WORKFLOW_LEADER_NAMES) {
+    const leader = await readFile(join(root, ".codex", "agents", `${name}.toml`), "utf8");
+    assert.match(leader, /model = "saved-model"/);
+    assert.match(leader, /model_reasoning_effort = "saved-effort"/);
+  }
   const config = await readFile(join(root, ".codex", "config.toml"), "utf8");
-  assert.match(config, /model = "saved-model"/);
-  assert.match(config, /model_reasoning_effort = "saved-effort"/);
+  assert.doesNotMatch(config, /^model(?:_reasoning_effort)?\s*=/m);
 });
 
 test("install retains write, rollback, and close failures", async () => {

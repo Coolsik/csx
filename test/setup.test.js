@@ -14,8 +14,8 @@ import {
   cloneMatrix,
   presetMatrix
 } from "../lib/presets.js";
-import { applySetup, builtInPresets, codexModelContext, CUSTOM_PRESETS_FILE, readAgentMatrix, readCustomPresets, requestUniqueCustomPresetName, selectSetupScope, setupLayout } from "../lib/setup.js";
-import { LEADER_MANAGED_END, LEADER_MANAGED_START, install } from "../lib/install.js";
+import { applySetup, builtInPresets, codexModelContext, CUSTOM_PRESETS_FILE, readAgentMatrix, readCustomPresets, readSetupMatrix, requestUniqueCustomPresetName, selectSetupScope, setupLayout } from "../lib/setup.js";
+import { install } from "../lib/install.js";
 import { RECEIPT_NAME } from "../lib/installation-state.js";
 import { __setTransactionTestHooks, beginTransaction } from "../lib/transaction.js";
 import { acquireRootLock, controlPath, TransactionLockError } from "../lib/transaction-lock.js";
@@ -31,12 +31,18 @@ const declaredTransaction = (onDeclare, transaction) => async ({ createDeclarati
 };
 async function createSetupFixture(root, matrix, { receiptMatrix, customPresets } = {}) {
   const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
-  const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+  const specialistPaths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+  const leaderPaths = WORKFLOW_LEADER_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+  const paths = [...specialistPaths, ...leaderPaths];
   await mkdir(layout.agentsRoot, { recursive: true });
-  await writeFile(layout.configPath, `${LEADER_MANAGED_START}\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n${LEADER_MANAGED_END}\n\n# preserve this TOML\n`);
-  for (const [index, path] of paths.entries()) {
+  await writeFile(layout.configPath, 'model = "root-choice"\n\n# preserve this TOML\n');
+  for (const [index, path] of specialistPaths.entries()) {
     const name = AGENT_NAMES[index];
     await writeFile(path, `name = "${name}"\nmodel = "${matrix[name].model}"\nmodel_reasoning_effort = "${matrix[name].reasoning}"\nextra = "preserved"\n`);
+  }
+  for (const [index, path] of leaderPaths.entries()) {
+    const name = WORKFLOW_LEADER_NAMES[index];
+    await writeFile(path, `name = "${name}"\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\nextra = "preserved"\n`);
   }
   const receiptPath = join(layout.configRoot, RECEIPT_NAME);
   const receipt = { root: layout.root, files: paths };
@@ -109,14 +115,47 @@ test("setup awaits historical migration before selecting scope", async () => {
 
 test("Efficient, Balanced, and Strong define Leader plus seven agents", async () => {
   const builtIns = await builtInPresets();
-  assert.deepEqual(Object.keys(builtIns), ["Efficient", "Balanced", "Strong"]);
+  assert.deepEqual(builtIns, {
+    Efficient: {
+      leader: { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      "csx-explorer": { model: "gpt-5.6-luna", reasoning: "high" },
+      "csx-analyst": { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      "csx-planner": { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      "csx-architect": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-critic": { model: "gpt-5.6-luna", reasoning: "high" },
+      "csx-executor": { model: "gpt-5.6-luna", reasoning: "high" },
+      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "medium" }
+    },
+    Balanced: {
+      leader: { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      "csx-explorer": { model: "gpt-5.6-luna", reasoning: "high" },
+      "csx-analyst": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-planner": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-architect": { model: "gpt-5.6-sol", reasoning: "high" },
+      "csx-critic": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-executor": { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "high" }
+    },
+    Strong: {
+      leader: { model: "gpt-5.6-sol", reasoning: "high" },
+      "csx-explorer": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-analyst": { model: "gpt-5.6-sol", reasoning: "high" },
+      "csx-planner": { model: "gpt-5.6-sol", reasoning: "high" },
+      "csx-architect": { model: "gpt-5.6-sol", reasoning: "high" },
+      "csx-critic": { model: "gpt-5.6-sol", reasoning: "high" },
+      "csx-executor": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "high" }
+    }
+  });
   for (const matrix of Object.values(builtIns)) assert.deepEqual(Object.keys(matrix), ROLE_NAMES);
-  assert.deepEqual(builtIns.Balanced.leader, { model: "gpt-5.6-luna", reasoning: "max" });
-  assert.deepEqual(builtIns.Strong["csx-architect"], { model: "gpt-5.6-sol", reasoning: "xhigh" });
-  assert.equal(Object.values(builtIns).flatMap(Object.values).some(({ model }) => model.includes("terra")), false);
+  assert.equal(
+    Object.values(builtIns).flatMap(Object.values)
+      .some(({ model, reasoning }) => model.includes("terra") || reasoning === "max" || (model.endsWith("-sol") && reasoning === "xhigh")),
+    false
+  );
 });
 
-test("setup changes top-level Leader and specialists without rewriting workflow Leader files", async () => {
+test("setup updates workflow Leaders and specialists without changing Root config", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-setup-inherited-leaders-"));
   try {
     await install({ scope: "project", projectRoot: root });
@@ -124,6 +163,7 @@ test("setup changes top-level Leader and specialists without rewriting workflow 
     const leaderPaths = WORKFLOW_LEADER_NAMES.map((name) =>
       join(layout.agentsRoot, `${name}.toml`));
     const before = await Promise.all(leaderPaths.map((path) => readFile(path, "utf8")));
+    const rootConfigBefore = await readFile(layout.configPath, "utf8");
 
     const baseline = presetMatrix("Balanced");
     const matrix = cloneMatrix(baseline);
@@ -140,12 +180,34 @@ test("setup changes top-level Leader and specialists without rewriting workflow 
     });
 
     const after = await Promise.all(leaderPaths.map((path) => readFile(path, "utf8")));
-    assert.deepEqual(after, before);
-    assert.match(await readFile(layout.configPath, "utf8"), /model = "gpt-5\.6-sol"/);
+    assert.notDeepEqual(after, before);
+    for (const definition of after) {
+      assert.match(definition, /^model = "gpt-5\.6-sol"$/m);
+      assert.match(definition, /^model_reasoning_effort = "high"$/m);
+    }
+    assert.equal(await readFile(layout.configPath, "utf8"), rootConfigBefore);
     assert.match(
       await readFile(join(layout.agentsRoot, `${AGENT_NAMES[0]}.toml`), "utf8"),
       /model = "gpt-5\.6-sol"/
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("setup fails closed when workflow Leader definitions diverge", async () => {
+  const root = await mkdtemp(join(tmpdir(), "csx-setup-leader-drift-"));
+  try {
+    const matrix = presetMatrix("Balanced");
+    const { layout } = await createSetupFixture(root, matrix, { receiptMatrix: matrix });
+    const path = join(layout.agentsRoot, `${WORKFLOW_LEADER_NAMES[1]}.toml`);
+    const text = await readFile(path, "utf8");
+    await writeFile(path, text.replace(
+      `model_reasoning_effort = "${matrix.leader.reasoning}"`,
+      'model_reasoning_effort = "high"'
+    ));
+
+    await assert.rejects(readSetupMatrix(layout), /workflow Leader model configurations do not match/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -317,12 +379,17 @@ test("setup snapshots the complete installation target while limiting writes to 
   try {
     const layout = setupLayout({ cwd: root, env: { HOME: root } }).project;
     await mkdir(layout.agentsRoot, { recursive: true });
-    const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+    const specialistPaths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+    const leaderPaths = WORKFLOW_LEADER_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+    const paths = [...specialistPaths, ...leaderPaths];
     const matrix = presetMatrix("Low");
-    await writeFile(layout.configPath, `${LEADER_MANAGED_START}\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n${LEADER_MANAGED_END}\n\n# preserve this TOML\n`);
-    for (const [index, path] of paths.entries()) {
+    await writeFile(layout.configPath, 'model = "root-choice"\n\n# preserve this TOML\n');
+    for (const [index, path] of specialistPaths.entries()) {
       const value = matrix[AGENT_NAMES[index]];
       await writeFile(path, `name = \"${AGENT_NAMES[index]}\"\nmodel = \"${value.model}\"\nmodel_reasoning_effort = \"${value.reasoning}\"\nextra = \"preserved\"\n`);
+    }
+    for (const [index, path] of leaderPaths.entries()) {
+      await writeFile(path, `name = "${WORKFLOW_LEADER_NAMES[index]}"\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\nextra = "preserved"\n`);
     }
     const receiptPath = join(layout.configRoot, ".csx-install-receipt.json");
     await writeFile(receiptPath, JSON.stringify({ root, files: paths, setupAgentMatrix: { version: 2, roles: matrix } }));
@@ -741,12 +808,17 @@ test("setup rejects custom-preset drift after preview without writing either sco
     const layout = setupLayout({ cwd: home, env: { HOME: home } }).global;
     const matrix = cloneMatrix(presetMatrix("Low"));
     matrix["csx-analyst"] = { model: "gpt-5.6-luna", reasoning: "low" };
-    const paths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+    const specialistPaths = AGENT_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+    const leaderPaths = WORKFLOW_LEADER_NAMES.map((name) => join(layout.agentsRoot, `${name}.toml`));
+    const paths = [...specialistPaths, ...leaderPaths];
     await mkdir(layout.agentsRoot, { recursive: true });
-    await writeFile(layout.configPath, `${LEADER_MANAGED_START}\nmodel = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n${LEADER_MANAGED_END}\n\n# preserve this TOML\n`);
-    for (const [index, path] of paths.entries()) {
+    await writeFile(layout.configPath, 'model = "root-choice"\n\n# preserve this TOML\n');
+    for (const [index, path] of specialistPaths.entries()) {
       const value = matrix[AGENT_NAMES[index]];
       await writeFile(path, `model = "${value.model}"\nmodel_reasoning_effort = "${value.reasoning}"\n`);
+    }
+    for (const path of leaderPaths) {
+      await writeFile(path, `model = "${matrix.leader.model}"\nmodel_reasoning_effort = "${matrix.leader.reasoning}"\n`);
     }
     await writeFile(join(layout.configRoot, ".csx-install-receipt.json"), JSON.stringify({ root: layout.root, files: paths, setupAgentMatrix: { version: 2, roles: matrix } }));
     const presetsPath = join(layout.root, CUSTOM_PRESETS_FILE);

@@ -571,8 +571,9 @@ test("csx-plan-pro uses a single-writer sequential artifact gate with bounded bl
 
   assert.match(skill, /Root spawns one `csx-plan-leader` with `fork_turns: "none"`/);
   assert.match(leader, /sandbox_mode = "workspace-write"/);
-  assert.doesNotMatch(leader, /^model\s*=/m);
-  assert.doesNotMatch(leader, /^model_reasoning_effort\s*=/m);
+  assert.match(leader, /^model = "gpt-5\.6-luna"$/m);
+  assert.match(leader, /^model_reasoning_effort = "xhigh"$/m);
+  assert.match(leader, /Root is selected\s+independently/);
   for (const specialist of [planner, architect, critic]) {
     assert.match(specialist, /sandbox_mode = "read-only"/);
   }
@@ -719,8 +720,9 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
   assert.match(skill, /Spawn exactly one `csx-start-goal-leader` with `fork_turns: "none"`/);
   assert.match(skill, /Do not nest a\s+separate Execution Leader or Review Leader/);
   assert.match(leader, /sandbox_mode = "workspace-write"/);
-  assert.doesNotMatch(leader, /^model\s*=/m);
-  assert.doesNotMatch(leader, /^model_reasoning_effort\s*=/m);
+  assert.match(leader, /^model = "gpt-5\.6-luna"$/m);
+  assert.match(leader, /^model_reasoning_effort = "xhigh"$/m);
+  assert.match(leader, /Root is selected independently/);
   assert.match(skill, /only direct writer of `\.csx\/goals\/<slug>\.md`/);
   assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE_SCOPE`/);
   assert.match(skill, /`BLOCKED_UNAUTHORIZED_WRITE`/);
@@ -959,7 +961,8 @@ test("README documents clarity gates, workflow leaders, and bounded execution re
   assert.match(compact, /Plan Leader and Start-Goal Leader checkpoint/);
   assert.match(compact, /context use reaches 35%/);
   assert.match(compact, /at 50% or after compaction/);
-  assert.match(compact, /inherit the selected `LEADER` pair/);
+  assert.match(compact, /one logical `LEADER` role and writes the selected pair to both/);
+  assert.match(compact, /Root is configured independently and is not a setup-matrix role/);
   assert.match(compact, /seven configurable specialists/);
   assert.match(compact, /also registers `csx-plan-leader` and `csx-start-goal-leader`/);
   assert.match(compact, /`ROOT_REPLACEMENT_RECOMMENDED`/);

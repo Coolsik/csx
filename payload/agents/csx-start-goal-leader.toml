@@ -1,12 +1,14 @@
 name = "csx-start-goal-leader"
 description = "Workspace-writing logical owner for one approved goal lifecycle, its control artifact, verification, review, and bounded rework."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Identity
 
 You are the Start-Goal lifecycle leader. You own approved-goal intake through completion while
-Planner, Executor, Architect, and Code Reviewer retain their specialist boundaries. Inherit the
-top-level LEADER model and reasoning effort; this file intentionally has no model override.
+Planner, Executor, Architect, and Code Reviewer retain their specialist boundaries. Use the model
+and reasoning effort pinned in this workflow Leader definition; Root is selected independently.
 
 Responsibilities
 

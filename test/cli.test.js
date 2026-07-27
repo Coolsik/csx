@@ -8,7 +8,7 @@ import pty from "node-pty";
 import { promisify } from "node:util";
 import test from "node:test";
 import { install } from "../lib/install.js";
-import { AGENT_NAMES, ROLE_NAMES, presetMatrix } from "../lib/presets.js";
+import { AGENT_NAMES, ROLE_NAMES, WORKFLOW_LEADER_NAMES, presetMatrix } from "../lib/presets.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = resolve(root, "bin", "csx.js");
@@ -211,7 +211,7 @@ test("model-first PTY assigns one role and calls Apply exactly once", async () =
     assert.equal(result.harness.ok, true);
     assert.equal(result.harness.applyCount, 1);
     assert.equal(result.harness.result.changed, true);
-    assert.deepEqual(result.harness.changes, { agents: 0, config: 1, receipt: 1, custom: 0 });
+    assert.deepEqual(result.harness.changes, { agents: 2, config: 0, receipt: 1, custom: 0 });
     const after = await readRoleMatrix(fixture);
     assert.deepEqual(after.leader, { model: "gpt-5.6-sol", reasoning: "low" });
     for (const agent of AGENT_NAMES) assert.deepEqual(after[agent], before[agent]);
@@ -239,7 +239,7 @@ test("All roles plus a unique custom preset save commit atomically on final Appl
     assert.equal(result.code, 0, result.output);
     assert.equal(result.harness.ok, true);
     assert.equal(result.harness.applyCount, 1);
-    assert.deepEqual(result.harness.changes, { agents: 7, config: 1, receipt: 1, custom: 1 });
+    assert.deepEqual(result.harness.changes, { agents: 9, config: 0, receipt: 1, custom: 1 });
     assert.deepEqual(await readRoleMatrix(fixture), matrix("gpt-5.6-sol", "low"));
     const custom = JSON.parse(await readFile(fixture.customPath, "utf8"));
     assert.deepEqual(custom.presets["Team-sol-low"], matrix("gpt-5.6-sol", "low"));
@@ -438,9 +438,12 @@ async function setupFixture({
       const withModel = replaceFixtureAssignment(text, "model", pair.model);
       await writeFile(path, replaceFixtureAssignment(withModel, "model_reasoning_effort", pair.reasoning));
     }));
-    const config = await readFile(configPath, "utf8");
-    const withLeader = replaceFixtureAssignment(config, "model", baselineMatrix.leader.model);
-    await writeFile(configPath, replaceFixtureAssignment(withLeader, "model_reasoning_effort", baselineMatrix.leader.reasoning));
+    await Promise.all(WORKFLOW_LEADER_NAMES.map(async (name) => {
+      const path = join(agentsRoot, `${name}.toml`);
+      const text = await readFile(path, "utf8");
+      const withModel = replaceFixtureAssignment(text, "model", baselineMatrix.leader.model);
+      await writeFile(path, replaceFixtureAssignment(withModel, "model_reasoning_effort", baselineMatrix.leader.reasoning));
+    }));
   }
   const installedMatrix = await readRoleMatrix({ agentsRoot, configPath });
   await mkdir(bin);
@@ -484,19 +487,24 @@ async function readAgentMatrix(agentsRoot) {
 }
 
 async function readRoleMatrix(fixture) {
-  const config = await readFile(fixture.configPath, "utf8");
+  const leaders = await Promise.all(WORKFLOW_LEADER_NAMES.map(async (name) => {
+    const text = await readFile(join(fixture.agentsRoot, `${name}.toml`), "utf8");
+    return {
+      model: /(?:^|\n)model\s*=\s*"([^"]+)"/.exec(text)[1],
+      reasoning: /(?:^|\n)model_reasoning_effort\s*=\s*"([^"]+)"/.exec(text)[1]
+    };
+  }));
+  assert.deepEqual(leaders[1], leaders[0]);
   return {
-    leader: {
-      model: /(?:^|\n)model\s*=\s*"([^"]+)"/.exec(config)[1],
-      reasoning: /(?:^|\n)model_reasoning_effort\s*=\s*"([^"]+)"/.exec(config)[1]
-    },
+    leader: leaders[0],
     ...await readAgentMatrix(fixture.agentsRoot)
   };
 }
 
 function trackedFiles(fixture) {
   return {
-    agents: AGENT_NAMES.map((name) => join(fixture.agentsRoot, `${name}.toml`)),
+    agents: [...AGENT_NAMES, ...WORKFLOW_LEADER_NAMES].map((name) =>
+      join(fixture.agentsRoot, `${name}.toml`)),
     config: [fixture.configPath],
     receipt: [fixture.receiptPath],
     custom: [fixture.customPath]
