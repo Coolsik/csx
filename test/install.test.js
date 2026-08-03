@@ -100,8 +100,8 @@ test("global install preserves Root settings and applies Balanced to workflow Le
     const path = join(codex, "agents", `${name}.toml`);
     assert.equal(existsSync(path), true);
     const definition = await readFile(path, "utf8");
-    assert.match(definition, /^model = "gpt-5\.6-luna"$/m);
-    assert.match(definition, /^model_reasoning_effort = "xhigh"$/m);
+    assert.match(definition, /^model = "gpt-5\.6-terra"$/m);
+    assert.match(definition, /^model_reasoning_effort = "high"$/m);
     assert.equal(receipt.files.includes(path), true);
   }
   assert.deepEqual(Object.keys(receipt.setupAgentMatrix.roles).sort(), ["leader", ...AGENT_NAMES].sort());

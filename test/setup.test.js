@@ -116,40 +116,40 @@ test("Efficient, Balanced, and Strong define Leader plus seven agents", async ()
   const builtIns = await builtInPresets();
   assert.deepEqual(builtIns, {
     Efficient: {
-      leader: { model: "gpt-5.6-luna", reasoning: "xhigh" },
-      "csx-explorer": { model: "gpt-5.6-luna", reasoning: "high" },
-      "csx-analyst": { model: "gpt-5.6-luna", reasoning: "xhigh" },
-      "csx-planner": { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      leader: { model: "gpt-5.6-terra", reasoning: "medium" },
+      "csx-explorer": { model: "gpt-5.6-luna", reasoning: "medium" },
+      "csx-analyst": { model: "gpt-5.6-terra", reasoning: "medium" },
+      "csx-planner": { model: "gpt-5.6-terra", reasoning: "high" },
       "csx-architect": { model: "gpt-5.6-sol", reasoning: "medium" },
       "csx-critic": { model: "gpt-5.6-luna", reasoning: "high" },
       "csx-executor": { model: "gpt-5.6-luna", reasoning: "high" },
-      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "medium" }
+      "csx-code-reviewer": { model: "gpt-5.6-terra", reasoning: "medium" }
     },
     Balanced: {
-      leader: { model: "gpt-5.6-luna", reasoning: "xhigh" },
+      leader: { model: "gpt-5.6-terra", reasoning: "high" },
       "csx-explorer": { model: "gpt-5.6-luna", reasoning: "high" },
-      "csx-analyst": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-analyst": { model: "gpt-5.6-terra", reasoning: "high" },
       "csx-planner": { model: "gpt-5.6-sol", reasoning: "medium" },
       "csx-architect": { model: "gpt-5.6-sol", reasoning: "high" },
-      "csx-critic": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-critic": { model: "gpt-5.6-terra", reasoning: "high" },
       "csx-executor": { model: "gpt-5.6-luna", reasoning: "xhigh" },
-      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "high" }
+      "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "medium" }
     },
     Strong: {
-      leader: { model: "gpt-5.6-sol", reasoning: "high" },
-      "csx-explorer": { model: "gpt-5.6-sol", reasoning: "medium" },
+      leader: { model: "gpt-5.6-terra", reasoning: "high" },
+      "csx-explorer": { model: "gpt-5.6-luna", reasoning: "xhigh" },
       "csx-analyst": { model: "gpt-5.6-sol", reasoning: "high" },
       "csx-planner": { model: "gpt-5.6-sol", reasoning: "high" },
-      "csx-architect": { model: "gpt-5.6-sol", reasoning: "high" },
-      "csx-critic": { model: "gpt-5.6-sol", reasoning: "high" },
-      "csx-executor": { model: "gpt-5.6-sol", reasoning: "medium" },
+      "csx-architect": { model: "gpt-5.6-sol", reasoning: "xhigh" },
+      "csx-critic": { model: "gpt-5.6-terra", reasoning: "xhigh" },
+      "csx-executor": { model: "gpt-5.6-luna", reasoning: "xhigh" },
       "csx-code-reviewer": { model: "gpt-5.6-sol", reasoning: "high" }
     }
   });
   for (const matrix of Object.values(builtIns)) assert.deepEqual(Object.keys(matrix), ROLE_NAMES);
   assert.equal(
     Object.values(builtIns).flatMap(Object.values)
-      .some(({ model, reasoning }) => model.includes("terra") || reasoning === "max" || (model.endsWith("-sol") && reasoning === "xhigh")),
+      .some(({ reasoning }) => reasoning === "low" || reasoning === "max"),
     false
   );
 });
@@ -166,9 +166,9 @@ test("setup updates workflow Leaders and specialists without changing Root confi
 
     const baseline = presetMatrix("Balanced");
     const matrix = cloneMatrix(baseline);
-    const strong = presetMatrix("Strong");
-    matrix.leader = strong.leader;
-    matrix[AGENT_NAMES[0]] = strong[AGENT_NAMES[0]];
+    const efficient = presetMatrix("Efficient");
+    matrix.leader = efficient.leader;
+    matrix[AGENT_NAMES[0]] = efficient[AGENT_NAMES[0]];
     await applySetup({
       layout,
       matrix,
@@ -181,13 +181,13 @@ test("setup updates workflow Leaders and specialists without changing Root confi
     const after = await Promise.all(leaderPaths.map((path) => readFile(path, "utf8")));
     assert.notDeepEqual(after, before);
     for (const definition of after) {
-      assert.match(definition, /^model = "gpt-5\.6-sol"$/m);
-      assert.match(definition, /^model_reasoning_effort = "high"$/m);
+      assert.match(definition, /^model = "gpt-5\.6-terra"$/m);
+      assert.match(definition, /^model_reasoning_effort = "medium"$/m);
     }
     assert.equal(await readFile(layout.configPath, "utf8"), rootConfigBefore);
     assert.match(
       await readFile(join(layout.agentsRoot, `${AGENT_NAMES[0]}.toml`), "utf8"),
-      /model = "gpt-5\.6-sol"/
+      /model = "gpt-5\.6-luna"/
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -203,7 +203,7 @@ test("setup fails closed when workflow Leader definitions diverge", async () => 
     const text = await readFile(path, "utf8");
     await writeFile(path, text.replace(
       `model_reasoning_effort = "${matrix.leader.reasoning}"`,
-      'model_reasoning_effort = "high"'
+      'model_reasoning_effort = "medium"'
     ));
 
     await assert.rejects(readSetupMatrix(layout), /workflow Leader model configurations do not match/);
@@ -479,7 +479,7 @@ test("setup rewrites legal multiline assignments and records the effective matri
     const receipt = JSON.parse(await readFile(join(layout.configRoot, RECEIPT_NAME), "utf8"));
 
     assert.equal(result.changed, true);
-    assert.match(updated, /^\uFEFF# retained\r\nmodel = "gpt-5\.6-luna"\r\nmodel_reasoning_effort = "xhigh"\r\n/);
+    assert.match(updated, /^\uFEFF# retained\r\nmodel = "gpt-5\.6-terra"\r\nmodel_reasoning_effort = "medium"\r\n/);
     assert.ok(updated.endsWith('prompt = """\r\nPreserve\r\nthese lines\r\n"""\r\n'));
     assert.deepEqual(await readAgentMatrix(layout.agentsRoot), onlyAgents(matrix));
     assert.deepEqual(receipt.setupAgentMatrix, { version: 2, roles: matrix });
