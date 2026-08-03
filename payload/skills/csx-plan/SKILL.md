@@ -77,7 +77,7 @@ Require `source: csx-loop`, `plan_kind: csx-plan`, a matching accepted spec and 
 
 Validate every binding immediately before entry and consume the authority exactly once. Only the parent loop may derive authority for the one next transition from the same current-turn source after a successful child return. A question, blocker, cancellation, unrelated turn, or ended workflow invalidates it. This child must not derive or forward live authority.
 
-This branch never approves deployment, an external message, deletion, additional permission, or an irreversible side effect. Those actions always require their own approval. Missing or invalid loop context or live authority preserves the standalone explicit-selection workflow.
+This branch never approves deployment, an external message, deletion, additional permission, or an irreversible side effect on product or user data. Those actions always require their own approval. Deleting only `.csx/plans/<slug>.draft.md` after verified finalization is the bounded internal artifact cleanup defined by this skill, not authority for any other deletion. Missing or invalid loop context or live authority preserves the standalone explicit-selection workflow.
 
 ## Workflow
 
@@ -85,15 +85,17 @@ This branch never approves deployment, an external message, deletion, additional
 2. For a raw brownfield request, spawn `csx-explorer` to gather repository conventions, affected boundaries, referenced files or symbols, tests, and verification commands. When an accepted spec already contains current repository evidence, reuse its packet. If the repository changed or material evidence may be stale, ask Explorer to revalidate only the affected claims. A repository-independent greenfield plan may omit Explorer and record that no repository evidence applies.
 3. In the root thread, resolve remaining user-owned decisions that would change the plan. Record confirmed decisions, reversible assumptions, and open decisions separately.
 4. Always give the request or spec, evidence packet, and user decisions to `csx-planner`. In its assignment require the exact Planner Body Shape below, the smallest viable implementation path, `draft_version: 1`, preserved boundaries, acceptance criteria, concrete sequencing and ownership, the Verification Matrix, risks, stop conditions, and its strongest unresolved risk.
-5. A low-risk plan touching one obvious area may skip only independent Critic review and record `Review: SKIPPED_LOW_RISK`. For broad, risky, or cross-module work, give `csx-critic` the original request or accepted spec, every user decision and assumption, the current repository evidence packet, the exact Planner body candidate, and its draft version. Require the Critic to cross-check the draft against all of those inputs before issuing a verdict.
-6. Require the Critic to return the reviewed `draft_version` and exactly one verdict:
+5. Immediately after each Planner result arrives, write the complete response verbatim to `.csx/plans/<slug>.draft.md`. Verbatim means byte-for-byte, including the required diagnostics line. Persist it before parsing, summarizing, reviewing, or requesting another agent action. The temporary draft is the sole plan candidate for that version; the root may inspect metadata but must not normalize, repair, or rewrite the Planner body. Read the persisted file back and require its embedded `draft_version` to match the expected version before review.
+6. Always give `csx-critic` the draft path, its `draft_version`, and the accepted spec path, plus every user decision and assumption and the current repository evidence packet. Do not relay the Planner body in the Critic assignment. Critic must read the temporary file directly and compare its complete Planner body against the accepted spec, including scope, non-goals, constraints, acceptance criteria, decisions, and evidence. For a decision-ready raw request with no accepted spec, use the original request and recorded decisions as the requirements source and explicitly record that fallback. Require Critic to confirm that the version in the file matches the assigned `draft_version` before issuing a verdict.
+7. Require the Critic to return the reviewed `draft_version` and exactly one verdict:
    - `APPROVED`: the same draft version is ready to finalize.
    - `REVISE`: return the exact Critic findings to the Planner for another versioned draft.
    - `BLOCKED`: preserve the best draft with unresolved user-owned or otherwise unresolvable blockers and do not offer execution.
-7. For `REVISE`, resume the same Planner when possible with the exact prior draft, Critic findings, and user decisions, and require it to increment `draft_version` by exactly one. If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, prior draft, and exact Critic findings, and record the fallback in the Review Ledger. The root must not rewrite the draft.
-8. Every revised draft MUST receive one fresh Critic review with the same complete input set plus the prior Critic findings. Repeat until `APPROVED`, an unresolvable `BLOCKED` verdict, or a maximum of 5 review cycles. Failure to reach approval after cycle 5 produces a `BLOCKED` artifact containing the best draft and unresolved blockers.
-9. Any material change after approval invalidates that verdict and starts the next versioned review cycle, subject to the same 5-cycle maximum. A material change alters scope, boundaries, approach, sequence, acceptance criteria, verification, risks, assumptions, or stop conditions.
-10. Write `.csx/plans/<slug>.md` for every completed plan whether the final Decision is `READY` or `BLOCKED`. Place the exact final Planner body inside the Artifact Format envelope without modification, then append Critic review provenance, the Review Ledger, and handoff metadata outside that immutable body.
+8. For `REVISE`, resume the same Planner when possible with the temporary draft path, exact Critic findings, and user decisions, and require it to increment `draft_version` by exactly one. If the Planner cannot be resumed, spawn a fresh `csx-planner` with the complete evidence, decisions, temporary draft path, and exact Critic findings, and record the fallback in the Review Ledger. When the next Planner result arrives, repeat the immediate verbatim persistence gate in step 5 before any further action. The root must not rewrite the draft.
+9. Every revised draft MUST receive one fresh Critic review with the same complete input set plus the prior Critic findings. Repeat until `APPROVED`, an unresolvable `BLOCKED` verdict, or a maximum of 5 review cycles. Failure to reach approval after cycle 5 produces a `BLOCKED` artifact containing the best draft and unresolved blockers.
+10. Any material change after approval invalidates that verdict and starts the next versioned review cycle, subject to the same 5-cycle maximum. A material change alters scope, boundaries, approach, sequence, acceptance criteria, verification, risks, assumptions, or stop conditions.
+11. Only `APPROVED` for the same persisted `draft_version` authorizes finalization. For `READY`, write `.csx/plans/<slug>.md` from the exact approved Planner body inside the Artifact Format envelope without modification, then append Critic review provenance, the Review Ledger, and handoff metadata outside that immutable body. Read the final artifact back and verify its Planner body and approved version against the temporary draft. Delete `.csx/plans/<slug>.draft.md` only after the final artifact has been written and verified. If final writing or verification fails, retain the temporary draft and do not offer execution; if deletion fails, report the cleanup failure and do not report `READY`.
+12. Write `.csx/plans/<slug>.md` for every completed plan whether the final Decision is `READY` or `BLOCKED`. A terminal `BLOCKED` result is a non-executable failure artifact rather than approved finalization: assemble it from the best persisted Planner body and unresolved blockers, and retain `.csx/plans/<slug>.draft.md` for inspection or refinement.
 
 ## Root User Decisions
 
@@ -108,11 +110,11 @@ For step 3 and any decision exposed during review, call `request_user_input` fro
 
 ## Review Policy
 
-- Never skip Planner delegation while this skill is active. Only repository-independent greenfield work may omit Explorer, and only a low-risk plan touching one obvious area may omit Critic.
+- Never skip Planner delegation while this skill is active. Only repository-independent greenfield work may omit Explorer. Never skip Critic review while this skill is active.
 - Require Critic to follow the common output discipline while preserving every required review field and verdict.
 - Use the exact installed roles `csx-explorer`, `csx-planner`, and `csx-critic`; give each a unique task name, `fork_turns: "none"`, and an explicit stop condition.
-- If a required role is missing, ask the user to rerun `csx install` for the intended scope. Mark a non-trivial plan `BLOCKED: required independent role unavailable`; do not present a self-authored plan as independently reviewed.
-- The final plan body must be the exact approved draft body. The root may append review provenance and handoff metadata without invalidating approval.
+- If a required role is missing, ask the user to rerun `csx install` for the intended scope. Mark the plan `BLOCKED: required independent role unavailable`; do not present a self-authored plan as independently reviewed.
+- The final plan body must be the exact approved body read from `.csx/plans/<slug>.draft.md`. The root may append review provenance and handoff metadata without invalidating approval.
 
 ## Verification Matrix
 
@@ -167,14 +169,14 @@ draft_version: <N>
 READY / BLOCKED
 
 ## Review
-APPROVED / SKIPPED_LOW_RISK / BLOCKED
+APPROVED / BLOCKED
 Approved draft_version: <N or N/A>
 
 ## Planner Body
 <exact final Planner body>
 
 ## Critic Review
-<exact result for the final reviewed version, or SKIPPED_LOW_RISK>
+<exact result for the final reviewed version>
 
 ## Review Summary
 
@@ -190,7 +192,7 @@ Keep plans short. Prefer 5-9 concrete steps over exhaustive task trees.
 
 For a validated loop context whose selected kind is `csx-plan`, whose accepted spec and slug match, and whose current plan-transition authority was consumed, replace the standalone handoff only when the final artifact has `Decision: READY`. Return `plan_path`, `plan_kind: csx-plan`, `plan_status: READY`, the accepted `draft_version`, accepted reversible assumptions, repository marker, and complete loop provenance to the parent `$csx-loop`; do not call `request_user_input` and do not invoke `$csx-start-goal`. The immutable Planner Body and the maximum of 5 review cycles remain unchanged.
 
-For `Decision: BLOCKED`, a required-role failure, or review exhaustion, return `BLOCKED`, the blocker, and last valid checkpoint to the parent and invalidate authority. Never auto-select `Refine further`. The parent alone may validate the return and derive the start-goal transition. If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged.
+For `Decision: BLOCKED`, a required-role failure, or review exhaustion, return `BLOCKED`, the blocker, the last valid checkpoint, and the temporary draft path when it exists to the parent and invalidate authority. Never auto-select `Refine further`. The parent alone may validate the return and derive the start-goal transition. If the loop context or live authority is absent or invalid, use the standalone handoff below unchanged.
 
 After writing the artifact, call `request_user_input` from the root thread.
 

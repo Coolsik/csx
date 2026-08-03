@@ -496,7 +496,7 @@ test("csx-spec locks topology, scores ambiguity, and closes every interview mode
   assert.match(analyst, /2 KiB soft limit/);
 });
 
-test("csx-plan always delegates draft authorship and preserves versioned review", async () => {
+test("csx-plan persists exact planner drafts and reviews them by path before finalization", async () => {
   const skill = await readSkill("csx-plan");
 
   assert.match(skill, /`csx-planner` owns every plan draft/);
@@ -506,9 +506,15 @@ test("csx-plan always delegates draft authorship and preserves versioned review"
   assert.match(skill, /reuse its packet/);
   assert.match(skill, /Always give the request or spec, evidence packet, and user decisions to `csx-planner`/);
   assert.match(skill, /Never skip Planner delegation while this skill is active/);
-  assert.match(skill, /A low-risk plan touching one obvious area may skip only independent Critic review/);
-  assert.match(skill, /give `csx-critic` the original request or accepted spec, every user decision and assumption, the current repository evidence packet/);
-  assert.match(skill, /Require the Critic to cross-check the draft against all of those inputs/);
+  assert.match(skill, /Never skip Critic review while this skill is active/);
+  assert.doesNotMatch(skill, /SKIPPED_LOW_RISK/);
+  assert.match(skill, /Immediately after each Planner result arrives, write the complete response verbatim to `\.csx\/plans\/<slug>\.draft\.md`/);
+  assert.match(skill, /Persist it before parsing, summarizing, reviewing, or requesting another agent action/);
+  assert.match(skill, /The temporary draft is the sole plan candidate for that version/);
+  assert.match(skill, /give `csx-critic` the draft path, its `draft_version`, and the accepted spec path/);
+  assert.match(skill, /Do not relay the Planner body in the Critic assignment/);
+  assert.match(skill, /Critic must read the temporary file directly and compare its complete Planner body against the accepted spec/);
+  assert.match(skill, /Only `APPROVED` for the same persisted `draft_version` authorizes finalization/);
   assert.match(skill, /draft_version: 1/);
   assert.match(skill, /`REVISE`:[\s\S]*another versioned draft/);
   assert.match(skill, /increment `draft_version` by exactly one/);
@@ -520,7 +526,10 @@ test("csx-plan always delegates draft authorship and preserves versioned review"
   assert.match(skill, /for every completed plan whether the final Decision is `READY` or `BLOCKED`/);
   assert.match(skill, /The root must not rewrite the draft/);
   assert.match(skill, /## Planner Body Shape/);
-  assert.match(skill, /Place the exact final Planner body inside the Artifact Format envelope without modification/);
+  assert.match(skill, /exact approved Planner body inside the Artifact Format envelope without modification/);
+  assert.match(skill, /write `\.csx\/plans\/<slug>\.md` from the exact approved Planner body/);
+  assert.match(skill, /Delete `\.csx\/plans\/<slug>\.draft\.md` only after the final artifact has been written and verified/);
+  assert.match(skill, /If final writing or verification fails, retain the temporary draft/);
   assert.match(skill, /\| Criterion \| Evidence \| Command or Scenario \| Expected Result \| Failure Signal \|/);
   assert.match(skill, /Never invoke execution from a BLOCKED plan/);
 });
