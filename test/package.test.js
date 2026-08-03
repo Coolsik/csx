@@ -57,14 +57,8 @@ test("npm dry-run package contains the complete runtime and no local residue", a
   }
 });
 
-test("the packaged historical registry is code-owned and exactly seven families", () => {
+test("the packaged historical registry is code-owned and contains the supported family", () => {
   assert.deepEqual(HISTORICAL_INSTALLATION_FAMILIES.map(({ id }) => id), [
-    "h21-3abc221",
-    "h21-8933704",
-    "h21-64de366-fresh",
-    "h21-64de366-setup",
-    "h23-a221623-fresh",
-    "h23-a221623-setup",
     "h22-9af4616"
   ]);
 });

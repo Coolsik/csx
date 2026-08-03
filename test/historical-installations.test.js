@@ -21,7 +21,7 @@ const FIXTURE_PATH = join(
 );
 const fixtureRegistry = JSON.parse(await readFile(FIXTURE_PATH, "utf8"));
 
-test("the immutable registry contains exactly the seven commit-produced families", () => {
+test("the immutable registry contains the supported commit-produced family", () => {
   assert.equal(Object.isFrozen(HISTORICAL_INSTALLATION_FAMILIES), true);
   assert.deepEqual(HISTORICAL_INSTALLATION_FAMILIES.map((entry) => ({
     id: entry.id,
@@ -34,7 +34,7 @@ test("the immutable registry contains exactly the seven commit-produced families
   })));
 });
 
-test("all seven exact snapshots match with only root and installedAt substituted", async () => {
+test("the exact snapshot matches with only root and installedAt substituted", async () => {
   for (const fixture of fixtureRegistry) {
     const root = "/fixture/project";
     const snapshot = historicalInstallationTemplate(fixture.id, {
@@ -63,9 +63,9 @@ test("all seven exact snapshots match with only root and installedAt substituted
   }
 });
 
-test("same-semver subsets, supersets, cross-family tuples, and duplicate paths are rejected", async () => {
+test("same-semver subsets, supersets, mismatched configurations, and duplicate paths are rejected", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-history-paths-"));
-  const base = historicalInstallationTemplate("h21-64de366-fresh", { root });
+  const base = historicalInstallationTemplate("h22-9af4616", { root });
   const mutate = (fn) => {
     const receipt = structuredClone(base.receipt);
     fn(receipt);
@@ -80,18 +80,17 @@ test("same-semver subsets, supersets, cross-family tuples, and duplicate paths a
   assert.equal(mutate((receipt) => receipt.files.push(join(root, ".codex", "agents", "extra.toml"))), null);
   assert.equal(mutate((receipt) => receipt.files.push(receipt.files[0])), null);
 
-  const h23 = historicalInstallationTemplate("h23-a221623-fresh", { root });
   assert.equal(matchHistoricalInstallation({
     root,
-    receipt: h23.receipt,
-    config: h23.config,
+    receipt: base.receipt,
+    config: `${base.config}\n# mismatched historical configuration\n`,
     payloadDigest: base.payloadDigest
   }), null);
 });
 
 test("escape paths and forged feature, matrix, leader, or marker metadata are rejected", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-history-forged-"));
-  for (const id of ["h21-64de366-setup", "h22-9af4616"]) {
+  for (const id of ["h22-9af4616"]) {
     const base = historicalInstallationTemplate(id, { root });
     const rejectReceipt = (edit) => {
       const receipt = structuredClone(base.receipt);

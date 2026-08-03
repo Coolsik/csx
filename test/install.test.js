@@ -21,7 +21,6 @@ import {
 import {
   AGENT_NAMES,
   INSTALLED_AGENT_NAMES,
-  LEGACY_VERIFIER_NAME,
   WORKFLOW_LEADER_NAMES,
   presetMatrix
 } from "../lib/presets.js";
@@ -107,7 +106,6 @@ test("global install preserves Root settings and applies Balanced to workflow Le
   }
   assert.deepEqual(Object.keys(receipt.setupAgentMatrix.roles).sort(), ["leader", ...AGENT_NAMES].sort());
   assert.equal(receipt.leaderConfig, undefined);
-  assert.equal(existsSync(join(codex, "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
   const config = await readFile(join(codex, "config.toml"), "utf8");
   assert.doesNotMatch(config, new RegExp(LEADER_MANAGED_START));
   assert.doesNotMatch(config, new RegExp(LEADER_MANAGED_END));
@@ -119,7 +117,6 @@ test("global install preserves Root settings and applies Balanced to workflow Le
   assert.match(config, /\[\[hooks\.SessionStart\]\]/);
   assert.match(config, /\[\[hooks\.SubagentStop\]\]/);
   assert.equal((config.match(/\[\[hooks\./g) ?? []).length, 3);
-  assert.doesNotMatch(config, /\[agents\.csx-verifier\]/);
   for (const name of INSTALLED_AGENT_NAMES) {
     assert.match(config, new RegExp(`\\[agents\\.${name}\\]`));
   }
@@ -170,63 +167,6 @@ test("repeat install migrates managed Root defaults into workflow Leader files",
     assert.match(definition, new RegExp(`^model = "${escapeRegExp(pair.model)}"$`, "m"));
     assert.match(definition, new RegExp(`^model_reasoning_effort = "${escapeRegExp(pair.reasoning)}"$`, "m"));
   }
-});
-
-test("repeat install migrates an exact legacy verifier receipt and preserves Root on uninstall", async () => {
-  const root = await temporary("legacy verifier migration ");
-  const configPath = join(root, ".codex", "config.toml");
-  const receiptPath = join(root, ".codex", ".csx-install-receipt.json");
-  const verifierPath = join(root, ".codex", "agents", `${LEGACY_VERIFIER_NAME}.toml`);
-  await install({ scope: "project", projectRoot: root });
-
-  const leaderRegion = new RegExp(
-    `${escapeRegExp(LEADER_MANAGED_START)}[\\s\\S]*?${escapeRegExp(LEADER_MANAGED_END)}\\n*`
-  );
-  let config = (await readFile(configPath, "utf8")).replace(leaderRegion, "");
-  config = `model = "legacy-user-model"\nmodel_reasoning_effort = "high"\n\n${config}`;
-  config = config.replace(
-    "[[hooks.SessionStart]]",
-    `[agents.${LEGACY_VERIFIER_NAME}]\nconfig_file = "./agents/${LEGACY_VERIFIER_NAME}.toml"\n\n[[hooks.SessionStart]]`
-  );
-  await writeFile(configPath, config);
-  await writeFile(verifierPath, 'model = "legacy-verifier"\nmodel_reasoning_effort = "high"\n');
-
-  const legacy = presetMatrix("Balanced");
-  const legacyAgents = Object.fromEntries([
-    ...AGENT_NAMES,
-    LEGACY_VERIFIER_NAME
-  ].map((name) => [name, {
-    model: name === LEGACY_VERIFIER_NAME ? "legacy-verifier" : `saved-${name}`,
-    reasoning: "high"
-  }]));
-  const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
-  receipt.files.push(verifierPath);
-  receipt.setupAgentMatrix = { version: 1, agents: legacyAgents };
-  delete receipt.leaderConfig;
-  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-
-  await install({ scope: "project", projectRoot: root });
-
-  assert.equal(existsSync(verifierPath), false);
-  const upgradedConfig = await readFile(configPath, "utf8");
-  assert.doesNotMatch(upgradedConfig, /\[agents\.csx-verifier\]/);
-  assert.doesNotMatch(upgradedConfig, new RegExp(LEADER_MANAGED_START));
-  assert.match(upgradedConfig, /^model = "legacy-user-model"$/m);
-  assert.match(upgradedConfig, /^model_reasoning_effort = "high"$/m);
-  for (const name of WORKFLOW_LEADER_NAMES) {
-    const leader = await readFile(join(root, ".codex", "agents", `${name}.toml`), "utf8");
-    assert.match(leader, /^model = "gpt-5\.6-luna"$/m);
-    assert.match(leader, /^model_reasoning_effort = "xhigh"$/m);
-  }
-  const upgradedReceipt = JSON.parse(await readFile(receiptPath, "utf8"));
-  assert.equal(upgradedReceipt.files.includes(verifierPath), false);
-  assert.deepEqual(upgradedReceipt.setupAgentMatrix.roles.leader, legacy.leader);
-  assert.equal(upgradedReceipt.setupAgentMatrix.roles["csx-explorer"].model, "saved-csx-explorer");
-
-  await uninstall({ projectRoot: root });
-  const restored = await readFile(configPath, "utf8");
-  assert.match(restored, /model = "legacy-user-model"/);
-  assert.match(restored, /model_reasoning_effort = "high"/);
 });
 
 test("global install creates the default Codex home when absent", async () => {
@@ -1555,7 +1495,7 @@ test("uninstall preserves unrelated config and non-empty directories", async () 
   assert.equal(existsSync(join(root, ".codex", "config.toml")), true);
 });
 
-test("all seven registered historical families migrate from the invocation anchor into one canonical project", async () => {
+test("all registered historical families migrate from the invocation anchor into one canonical project", async () => {
   for (const family of HISTORICAL_INSTALLATION_FAMILIES) {
     const root = await temporary(`historical ${family.id} `);
     await runProcess("git", ["init", "-q", root]);
@@ -1574,10 +1514,10 @@ test("all seven registered historical families migrate from the invocation ancho
   }
 });
 
-test("same-root H21 upgrades through one canonical existing target with a non-overlapping expansion", async () => {
+test("same-root historical installation upgrades through one canonical existing target with a non-overlapping expansion", async () => {
   const root = await temporary("historical same root ");
   await runProcess("git", ["init", "-q", root]);
-  const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h21-3abc221");
+  const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h22-9af4616");
   await seedHistoricalInstallation(root, family);
   let declaration;
   const recordingApi = {
@@ -1594,10 +1534,9 @@ test("same-root H21 upgrades through one canonical existing target with a non-ov
   assert.equal(declaration.participants.filter(({ role }) => role === "historical-installation-target").length, 0);
   assert.equal(declaration.participants.filter(({ role }) => role === "metadata-participant").length, 1);
   assert.equal(existsSync(join(root, ".agents", "skills", "csx-deslop", "SKILL.md")), true);
-  assert.equal(existsSync(join(root, ".codex", "agents", `${LEGACY_VERIFIER_NAME}.toml`)), false);
 });
 
-test("legacy-only uninstall remains a project uninstall and leaves global untouched", async () => {
+test("historical-only uninstall remains a project uninstall and leaves global untouched", async () => {
   const home = await temporary("historical uninstall home ");
   const root = await temporary("historical uninstall project ");
   await runProcess("git", ["init", "-q", root]);
@@ -1674,8 +1613,8 @@ for (const drift of ["config", "payload"]) test(`historical ${drift} drift immed
 });
 
 for (const [id, boundary, exitCode] of [
-  ["h21-3abc221", "all-preimage", 81],
-  ["h23-a221623-fresh", "all-final", 82]
+  ["h22-9af4616", "all-preimage", 81],
+  ["h22-9af4616", "all-final", 82]
 ]) test(`historical install re-entry recovers ${boundary} ${id} bundle`, async () => {
   const root = await temporary(`historical install re-entry ${id} `);
   await runProcess("git", ["init", "-q", root]);
@@ -1690,7 +1629,7 @@ for (const [id, boundary, exitCode] of [
   assert.deepEqual(await readdir(join(root, ".csx-transactions", "bundles")), []);
 });
 
-for (const id of ["h21-3abc221", "h23-a221623-fresh"]) {
+for (const id of ["h22-9af4616"]) {
   for (const [boundary, exitCode] of [["all-preimage", 81], ["all-final", 82]]) {
     test(`same-root ${id} public re-entry recovers ${boundary}`, async () => {
       const root = await temporary(`same-root re-entry ${id} ${boundary} `);
@@ -1795,7 +1734,7 @@ for (const [attack, mutate] of metadataTopologyAttacks) {
   test(`same-root re-signed bundle rejects ${attack} without target or control mutation`, async () => {
     const root = await temporary(`same-root metadata attack ${attack} `);
     await runProcess("git", ["init", "-q", root]);
-    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h21-3abc221");
+    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h22-9af4616");
     await seedHistoricalInstallation(root, family);
     assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", root, "all-preimage"]), 81);
     const bundlePath = await onlyBundlePath(root);
@@ -1839,10 +1778,6 @@ const historicalBundleAttacks = [
     bundle.snapshotSet.sort();
     bundle.preimages[path] = { state: "absent" };
   }],
-  ["family mismatch", (bundle, historical) => {
-    const other = historicalInstallationTemplate("h23-a221623-fresh", { root: historical.root });
-    replaceBundlePreimage(bundle, historical.configPath, Buffer.from(other.config));
-  }],
   ["root escape", (bundle, historical) => { historical.paths[0] = resolve(historical.root, "..", "escape"); }],
   ["canonical metadata mismatch", (bundle) => {
     const canonical = bundle.participants.find(({ role }) => role === "prospective-installation-target");
@@ -1855,7 +1790,7 @@ for (const [attack, mutate] of historicalBundleAttacks) {
     const root = await temporary(`bundle historical ${attack} `);
     await runProcess("git", ["init", "-q", root]);
     const anchor = join(root, "nested");
-    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h21-3abc221");
+    const family = HISTORICAL_INSTALLATION_FAMILIES.find(({ id }) => id === "h22-9af4616");
     await seedHistoricalInstallation(anchor, family);
     assert.equal(await runExitCode(process.execPath, [recoveryWorker, "install", anchor, "all-preimage"]), 81);
     const bundlePath = await onlyBundlePath(root);

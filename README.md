@@ -432,13 +432,9 @@ write-ahead log.
 
 ## Historical installation migration
 
-Install, uninstall, and setup recognize exactly these seven historical
-receipt/config/payload signatures:
+Install, uninstall, and setup recognize this historical
+receipt/config/payload signature:
 
-- H21 at `3abc221`
-- H21 at `8933704`
-- H21 at `64de366`, in its fresh and setup forms
-- H23 at `a221623`, in its fresh and setup forms
 - H22 at `9af4616`
 
 Adoption and removal require the complete exact signature. Near matches,

@@ -836,7 +836,6 @@ test("csx-start-goal executes approved goals through one test-first lifecycle le
   assert.match(skill, /Goal deslop passes: <sum; each production-code goal 0\/1>/);
   assert.match(skill, /recorded as `legacy baseline`/);
   assert.match(skill, /call `update_goal` with `complete` exactly once/);
-  assert.doesNotMatch(skill, /csx-verifier/);
 });
 
 test("csx-deslop delegates one cleanup and identical before-after proof to Executor", async () => {
@@ -854,7 +853,6 @@ test("csx-deslop delegates one cleanup and identical before-after proof to Execu
   assert.match(skill, /Result: passed\/cleaned \| passed\/no-op \| blocked/);
   assert.match(skill, /Never report `passed` unless the exact same behavior lock succeeded before and after/);
   assert.match(skill, /Do not introduce new edge cases, platforms, threat models/);
-  assert.doesNotMatch(skill, /csx-verifier/);
   assert.doesNotMatch(executor, /\$csx-deslop/);
   assert.match(executor, /Do not[\s\S]*invoke another workflow/);
   assert.match(metadata, /allow_implicit_invocation: false/);
@@ -1047,7 +1045,7 @@ test("spec and planning workflows keep support and verification proportional", a
   assert.match(planPro, /Default to one primary-environment full suite plus affected-environment smoke checks/);
 });
 
-test("start-goal and installer retain explicit execution contracts without verifier", async () => {
+test("start-goal and installer retain explicit execution contracts", async () => {
   const [skill, installer, readme] = await Promise.all([
     readSkill("csx-start-goal"),
     readFile(resolve(root, "lib/install.js"), "utf8"),
@@ -1058,7 +1056,5 @@ test("start-goal and installer retain explicit execution contracts without verif
   assert.match(skill, /For a csx pro plan, accept only `Decision: APPROVED`/);
   assert.match(skill, /Reject every `BLOCKED` plan/);
   assert.match(skill, /explicit `Start execution with \$csx-start-goal` selection/);
-  assert.doesNotMatch(installer, /"csx-verifier"/);
   assert.match(readme, /Agent prompts define general, workflow-independent roles/);
-  assert.doesNotMatch(readme, /`csx-verifier` remains installed/);
 });

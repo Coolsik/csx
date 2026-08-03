@@ -8,7 +8,6 @@ import test from "node:test";
 import { discoverCodexModels } from "../lib/codex-models.js";
 import {
   AGENT_NAMES,
-  LEGACY_VERIFIER_NAME,
   ROLE_NAMES,
   WORKFLOW_LEADER_NAMES,
   cloneMatrix,
@@ -622,30 +621,6 @@ test("selectedAgents rejects target changes outside the selected subset before w
     await rm(root, { recursive: true, force: true });
   }
 });
-test("setup directs a legacy verifier installation through install migration first", async () => {
-  const root = await mkdtemp(join(tmpdir(), "csx-setup-legacy-"));
-  try {
-    const matrix = presetMatrix("Balanced");
-    const { layout, paths, receiptPath } = await createSetupFixture(root, matrix, {
-      receiptMatrix: matrix
-    });
-    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
-    receipt.files.push(join(layout.agentsRoot, `${LEGACY_VERIFIER_NAME}.toml`));
-    await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-
-    await assert.rejects(
-      applySetup({
-        layout,
-        matrix,
-        catalog,
-        expectedFilesLoader: async () => paths
-      }),
-      /run `csx install` before `csx setup`/
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
 test("fresh install leaves no configuration directories when locking capability is refused", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-install-refusal-"));
   try {
@@ -782,22 +757,13 @@ test("custom preset files require a versioned schema and unique normalized names
     await rm(root, { recursive: true, force: true });
   }
 });
-test("legacy custom presets drop verifier, add the Balanced Leader, and preserve new-name collisions", async () => {
+test("custom presets reject the removed version-one schema", async () => {
   const root = await mkdtemp(join(tmpdir(), "csx-custom-legacy-"));
   try {
     const path = join(root, ".codex", CUSTOM_PRESETS_FILE);
     await mkdir(join(root, ".codex"), { recursive: true });
-    const agents = Object.fromEntries([...AGENT_NAMES, LEGACY_VERIFIER_NAME].map((name) => [
-      name,
-      { model: `legacy-${name}`, reasoning: "high" }
-    ]));
-    await writeFile(path, JSON.stringify({ version: 1, presets: { Efficient: agents } }));
-
-    const loaded = await readCustomPresets({ env: { HOME: root } });
-
-    assert.deepEqual(loaded.presets.Efficient.leader, presetMatrix("Balanced").leader);
-    assert.equal(loaded.presets.Efficient["csx-explorer"].model, "legacy-csx-explorer");
-    assert.equal(LEGACY_VERIFIER_NAME in loaded.presets.Efficient, false);
+    await writeFile(path, JSON.stringify({ version: 1, presets: { Efficient: presetMatrix("Balanced") } }));
+    await assert.rejects(readCustomPresets({ env: { HOME: root } }), /invalid custom preset file/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

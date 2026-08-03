@@ -102,8 +102,8 @@ function presentSnapshot(data, mode = 0o600) {
   const bytes = Buffer.from(data);
   return { state: "present", data: bytes.toString("base64"), hash: createHash("sha256").update(bytes).digest("hex"), mode };
 }
-async function historicalParticipant(root, coordinationRoot, name) {
-  const id = name === "historical-a" ? "h21-3abc221" : "h21-8933704";
+async function historicalParticipant(root, coordinationRoot) {
+  const id = "h22-9af4616";
   const template = historicalInstallationTemplate(id, { root });
   for (const relativePath of template.paths) {
     const source = relativePath
@@ -142,8 +142,8 @@ async function migrationDeclaration() {
   const canonicalReceipt = join(root, ".csx-install-receipt.json");
   const canonicalManaged = join(root, "managed.txt");
   const metadataPath = join(metadataRoot, "presets.json");
-  const historicalA = await historicalParticipant(historicalRootA, root, "historical-a");
-  const historicalB = await historicalParticipant(historicalRootB, root, "historical-b");
+  const historicalA = await historicalParticipant(historicalRootA, root);
+  const historicalB = await historicalParticipant(historicalRootB, root);
   const prospective = {
     role: "prospective-installation-target",
     root,
