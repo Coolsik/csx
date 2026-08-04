@@ -62,8 +62,17 @@ still disable the feature.
 csx refuses to overwrite same-name files unless its installation receipt proves
 they are managed by csx. Existing config outside the marked csx block is
 preserved. Start a new Codex session after installation. Codex will ask you to
-review and trust the UserPromptSubmit, SessionStart, and SubagentStop command
+review and trust the UserPromptSubmit, SessionStart, SubagentStop, and Stop command
 hooks on first use.
+
+The Stop hook is a self-contained, immediate guard for an active Root wait lease.
+It blocks while a valid lease is bound to an active workflow with a current
+artifact, including during
+Root handoff, user-decision, blocked, and Leader-rotation boundary phases until
+Root validates the Leader result and closes the wait. Missing, expired,
+malformed, unsafe, or mismatched state and lease files bypass the guard. The
+hook never changes either file and fails open.
+
 ## Setup
 
 ```bash
@@ -372,13 +381,14 @@ remaining blocker or stale digest.
 
 ## Lifecycle state and authority
 
-An installation adds three self-contained command hooks: UserPromptSubmit routes
+An installation adds four self-contained command hooks: UserPromptSubmit routes
 explicit `csx ...` shorthand, SessionStart restores an eligible workflow, and
-SubagentStop records eligible local diagnostics. Each hook command carries its
-exact `project` or `global` scope and absolute installation root. Lifecycle
+SubagentStop records eligible local diagnostics. Stop immediately guards an
+active Root wait lease without sleeping. Each hook command carries its exact
+`project` or `global` scope and absolute installation root. Lifecycle
 operations accept that authority only when the running file and installation
 receipt prove exact receipt ownership. Missing, malformed, partially present,
-symlinked, or otherwise unsafe lifecycle authority fails closed.
+symlinked, or otherwise unsafe lifecycle authority produces no hook action.
 
 Only `csx-plan-pro` and `csx-start-goal` publish lifecycle state. Each linked
 worktree owns `.csx/workflow-state-v1.json` at its own top level; the common Git
@@ -389,6 +399,20 @@ schema-valid state whose recorded artifact is still a valid unchanged file
 under the workflow's allowed `.csx/plans/` or `.csx/goals/` directory. The state
 is project data, is not removed by `csx uninstall`, and therefore survives a
 later reinstall.
+
+Root wait coordination uses the bounded, no-follow
+`.csx/root-wait-lease-v1.json` file. Stop blocks only when that lease is active,
+unexpired, schema-valid, cryptographically bound to the active workflow token,
+and that workflow's artifact is safe and current. It continues to block repeated
+Stop calls while `stop_hook_active` is true. In the exact phases
+`root_handoff_ready`, `root_decision_required`,
+`root_blocked`, and `root_rotation_required`, Stop instructs Root to validate the
+Leader result and close the wait before the normal handoff, user decision, or
+Leader replacement; it does not request another wait cycle. In ordinary phases,
+it directs Root through `wait-next` and `wait_agent`. Terminal, missing, expired,
+future-dated, malformed, unsafe, and mismatched state or lease data bypasses the
+guard. Stop reads but never changes state or lease files and never emits their
+token, hash, path, or artifact content.
 
 Project authority takes precedence over global authority:
 

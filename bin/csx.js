@@ -18,7 +18,7 @@ const USAGE = `Usage:
   csx install [--scope global|project] [--project-root <path>]
   csx uninstall [--project-root <path>]
   csx setup
-  csx workflow begin|checkpoint|finish < request.json
+  csx workflow begin|checkpoint|finish|wait-open|wait-next|wait-close < request.json
   csx diagnostics [--json]
   csx --help
 
@@ -64,7 +64,7 @@ try {
       process.stdout.write(`Installed csx ${escapeTerminalText(result.version)} (${escapeTerminalText(result.scope)}) in ${escapeTerminalText(result.root)}\n`);
       process.stdout.write("Enabled Codex Default mode user-input choices for this install scope.\n");
       process.stdout.write("Start a new Codex session to load the installed skills and agents.\n");
-      process.stdout.write("On first use, review and trust the csx SessionStart and SubagentStop command hooks when Codex prompts you.\n");
+      process.stdout.write("On first use, review and trust the csx UserPromptSubmit, SessionStart, SubagentStop, and Stop command hooks when Codex prompts you.\n");
     }
   } else if (command === "setup") {
     if (args.length) throw new UsageError("setup does not accept arguments.");

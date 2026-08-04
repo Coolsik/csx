@@ -116,7 +116,8 @@ test("global install preserves Root settings and applies Balanced to workflow Le
   assert.match(config, /user-prompt-submit/);
   assert.match(config, /\[\[hooks\.SessionStart\]\]/);
   assert.match(config, /\[\[hooks\.SubagentStop\]\]/);
-  assert.equal((config.match(/\[\[hooks\./g) ?? []).length, 3);
+  assert.match(config, /\[\[hooks\.Stop\]\]/);
+  assert.equal((config.match(/\[\[hooks\./g) ?? []).length, 4);
   for (const name of INSTALLED_AGENT_NAMES) {
     assert.match(config, new RegExp(`\\[agents\\.${name}\\]`));
   }
@@ -561,6 +562,7 @@ test("repeat install upgrades the old managed prompt router without touching use
   assert.doesNotMatch(managed, /old-hook\.mjs/);
   assert.match(managed, /\[\[hooks\.SessionStart\]\]/);
   assert.match(managed, /\[\[hooks\.SubagentStop\]\]/);
+  assert.match(managed, /\[\[hooks\.Stop\]\]/);
   assert.match(upgraded, /\[\[hooks\.Notification\]\][\s\S]*command = "user-owned"/);
 });
 

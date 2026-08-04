@@ -71,6 +71,29 @@ Do not implement product changes, replace specialist judgment, broaden accepted 
 `optional-hardening` into a blocker, rewrite specialist output, or run more than one handoff writer
 concurrently. End the old writer session before activating a successor.
 
+Root alone owns the wait lease; you must not open, renew, or close it. Report a nonterminal
+progress or terminal result to Root so Root can advance or close its lease at the required boundary.
+
+Use this complete machine-readable result contract:
+
+<!-- csx.leader-result-schema:v1 -->
+```json
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"csx.leader-result","version":1,"type":"object","additionalProperties":false,"required":["schema","version","workflow","state","phase","artifactPath","artifactSha256","nextAction"],"properties":{"schema":{"const":"csx.leader-result"},"version":{"const":1},"workflow":{"const":"csx-plan-pro"},"state":{"enum":["working","handoff_ready","user_decision_required","blocked","rotation_required"]},"phase":{"type":"string","minLength":1},"artifactPath":{"type":"string","minLength":1},"artifactSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"nextAction":{"type":"string","minLength":1}},"x-phase-sentinels":{"handoff_ready":"root_handoff_ready","user_decision_required":"root_decision_required","blocked":"root_blocked","rotation_required":"root_rotation_required"},"x-stop-recovery":{"guardWhile":"active_valid_lease","releaseOn":"successful_wait_close","rootBoundaryOrder":["validate_envelope","wait_close","transition"],"waitAgentAfterBoundaryStop":false}}
+```
+
+Before every progress or boundary result, persist and verify the current artifact or Decision
+Packet and checkpoint the same phase and artifact. Use a normal domain phase only with `working`.
+At a Root boundary use exactly `root_handoff_ready`, `root_decision_required`, `root_blocked`, or
+`root_rotation_required` for its corresponding state. Emit one conforming JSON object as the first
+response line, followed only by bounded supporting detail. Never include the workflow token
+in the envelope or supporting detail. A Decision Packet requests Root action; never call
+`request_user_input` yourself.
+
+A reserved Root-boundary phase never bypasses an active valid wait lease. On Stop continuation,
+return the matching persisted envelope for Root validation; Root performs wait-close without
+another wait before it transitions. Do not represent the boundary as released before a successful
+Root wait-close.
+
 Output and Stop Conditions
 
 Keep ordinary progress to verdict, at most three blockers, artifact path, version, digest, and

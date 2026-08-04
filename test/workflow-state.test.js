@@ -19,6 +19,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import {
   WORKFLOW_ARTIFACT_LIMIT,
+  ROOT_WAIT_LEASE_PATH,
   WORKFLOW_STATE_LIMIT,
   WORKFLOW_STATE_PATH,
   readWorkflowState,
@@ -385,6 +386,262 @@ test("terminal state rejects later checkpoint and finish while preserving the re
     });
     assert.deepEqual(later, machineFailure("checkpoint", "token_mismatch"));
     assert.equal(await readFile(join(fixture.root, WORKFLOW_STATE_PATH), "utf8"), before);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("root wait lease follows the capped schedule with exact private disk state", async () => {
+  const fixture = await workflowFixture("goals", "wait.md", "R000");
+  try {
+    const begin = await operation(fixture, "begin", {
+      workflow: "csx-start-goal",
+      phase: "implementation"
+    });
+    const times = [
+      "2026-08-04T00:00:00.000Z",
+      "2026-08-04T00:00:30.000Z",
+      "2026-08-04T00:01:15.000Z",
+      "2026-08-04T00:02:30.000Z",
+      "2026-08-04T00:04:30.000Z",
+      "2026-08-04T00:07:30.000Z"
+    ];
+    const results = [];
+    for (let index = 0; index < times.length; index += 1) {
+      results.push(await runWorkflowOperation(index === 0 ? "wait-open" : "wait-next", {
+        version: 1,
+        projectRoot: fixture.root,
+        token: begin.token
+      }, { now: () => new Date(times[index]) }));
+    }
+    assert.deepEqual(results.map(({ wait }) => wait.waitSeconds), [30, 45, 75, 120, 180, 180]);
+    for (const result of results) {
+      assert.equal(result.ok, true);
+      assert.equal("token" in result, false);
+      assert.equal(JSON.stringify(result).includes(begin.token), false);
+      assert.equal(Object.keys(result.wait).includes("instanceTokenSha256"), false);
+    }
+
+    const disk = JSON.parse(await readFile(join(fixture.root, ROOT_WAIT_LEASE_PATH), "utf8"));
+    assert.deepEqual(Object.keys(disk).sort(), [
+      "expiresAt",
+      "instanceTokenSha256",
+      "openedAt",
+      "schema",
+      "status",
+      "updatedAt",
+      "version",
+      "waitIndex",
+      "waitSeconds",
+      "workflow"
+    ]);
+    assert.equal(disk.schema, "csx.root-wait-lease");
+    assert.equal(disk.status, "awaiting_leader");
+    assert.equal(disk.waitIndex, 4);
+    assert.equal(disk.waitSeconds, 180);
+    assert.equal(disk.instanceTokenSha256, sha256(begin.token));
+    assert.equal(disk.expiresAt, "2026-08-04T00:11:30.000Z");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("wait-open cannot reset an existing lease cadence or replace its binding", async () => {
+  const fixture = await workflowFixture("goals", "wait-open.md", "R000");
+  try {
+    const first = await operation(fixture, "begin", {
+      workflow: "csx-start-goal",
+      phase: "implementation"
+    });
+    await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    }, { now: () => new Date("2026-08-04T00:00:00.000Z") });
+    await runWorkflowOperation("wait-next", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    }, { now: () => new Date("2026-08-04T00:00:30.000Z") });
+    const leasePath = join(fixture.root, ROOT_WAIT_LEASE_PATH);
+    const before = await readFile(leasePath, "utf8");
+
+    const alreadyOpen = await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    }, { now: () => new Date("2026-08-04T00:00:31.000Z") });
+    assert.deepEqual(alreadyOpen, machineFailure("wait-open", "lease_already_open"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+
+    const expired = await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    }, { now: () => new Date("2026-08-04T00:02:15.000Z") });
+    assert.deepEqual(expired, machineFailure("wait-open", "lease_expired"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+
+    const replacement = await operation(fixture, "begin", {
+      workflow: "csx-start-goal",
+      phase: "replacement"
+    });
+    const mismatch = await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: replacement.token
+    }, { now: () => new Date("2026-08-04T00:02:16.000Z") });
+    assert.deepEqual(mismatch, machineFailure("wait-open", "lease_mismatch"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("wait operations reject stale tokens, expiry, terminal state, and malformed leases without mutation", async () => {
+  const fixture = await workflowFixture("plans", "wait-pro.md", "draft");
+  try {
+    const begin = await operation(fixture, "begin", {
+      workflow: "csx-plan-pro",
+      phase: "review"
+    });
+    const openResult = await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: begin.token
+    }, { now: () => new Date("2026-08-04T00:00:00.000Z") });
+    assert.equal(openResult.ok, true);
+    const leasePath = join(fixture.root, ROOT_WAIT_LEASE_PATH);
+    const before = await readFile(leasePath, "utf8");
+
+    const stale = await runWorkflowOperation("wait-next", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: "A".repeat(43)
+    }, { now: () => new Date("2026-08-04T00:00:30.000Z") });
+    assert.deepEqual(stale, machineFailure("wait-next", "token_mismatch"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+
+    const expired = await runWorkflowOperation("wait-next", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: begin.token
+    }, { now: () => new Date("2026-08-04T00:01:30.000Z") });
+    assert.deepEqual(expired, machineFailure("wait-next", "lease_expired"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+
+    const malformedBytes = Buffer.from(`${JSON.stringify({
+      ...JSON.parse(before),
+      unexpected: true
+    })}\n`);
+    await writeFile(leasePath, malformedBytes);
+    const malformed = await runWorkflowOperation("wait-close", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: begin.token
+    });
+    assert.deepEqual(malformed, machineFailure("wait-close", "lease_malformed"));
+    assert.deepEqual(await readFile(leasePath), malformedBytes);
+
+    await writeFile(leasePath, before);
+    await operation(fixture, "finish", {
+      token: begin.token,
+      phase: "complete",
+      outcome: "approved"
+    });
+    const terminal = await runWorkflowOperation("wait-close", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: begin.token
+    });
+    assert.deepEqual(terminal, machineFailure("wait-close", "token_mismatch"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("wait-close deletes only a lease matching the active workflow token", async () => {
+  const fixture = await workflowFixture("goals", "close.md", "R000");
+  try {
+    const first = await operation(fixture, "begin", {
+      workflow: "csx-start-goal",
+      phase: "implementation"
+    });
+    await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    });
+    const firstClose = await runWorkflowOperation("wait-close", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    });
+    assert.equal(firstClose.ok, true);
+    const second = await operation(fixture, "begin", {
+      workflow: "csx-start-goal",
+      phase: "replacement"
+    });
+    await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: second.token
+    });
+    const leasePath = join(fixture.root, ROOT_WAIT_LEASE_PATH);
+    const before = await readFile(leasePath, "utf8");
+
+    const staleClose = await runWorkflowOperation("wait-close", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: first.token
+    });
+    assert.deepEqual(staleClose, machineFailure("wait-close", "token_mismatch"));
+    assert.equal(await readFile(leasePath, "utf8"), before);
+
+    const [closeA, closeB] = await Promise.all([
+      runWorkflowOperation("wait-close", {
+        version: 1,
+        projectRoot: fixture.root,
+        token: second.token
+      }),
+      runWorkflowOperation("wait-close", {
+        version: 1,
+        projectRoot: fixture.root,
+        token: second.token
+      })
+    ]);
+    assert.equal([closeA, closeB].filter(({ ok }) => ok).length, 1);
+    assert.equal([closeA, closeB].some(({ code }) => code === "lease_missing"), true);
+    await assert.rejects(readFile(leasePath), { code: "ENOENT" });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("concurrent wait advances serialize and remain capped at 180 seconds", async () => {
+  const fixture = await workflowFixture("goals", "wait-race.md", "R000");
+  try {
+    const begin = await operation(fixture, "begin", {
+      workflow: "csx-start-goal",
+      phase: "implementation"
+    });
+    await runWorkflowOperation("wait-open", {
+      version: 1,
+      projectRoot: fixture.root,
+      token: begin.token
+    }, { now: () => new Date("2026-08-04T00:00:00.000Z") });
+    const advanced = await Promise.all(Array.from({ length: 12 }, () =>
+      runWorkflowOperation("wait-next", {
+        version: 1,
+        projectRoot: fixture.root,
+        token: begin.token
+      }, { now: () => new Date("2026-08-04T00:00:01.000Z") })));
+    assert.equal(advanced.every(({ ok }) => ok), true);
+    const disk = JSON.parse(await readFile(join(fixture.root, ROOT_WAIT_LEASE_PATH), "utf8"));
+    assert.equal(disk.waitIndex, 4);
+    assert.equal(disk.waitSeconds, 180);
+    assert.equal(disk.expiresAt, "2026-08-04T00:04:01.000Z");
   } finally {
     await fixture.cleanup();
   }

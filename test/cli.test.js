@@ -98,6 +98,53 @@ test("workflow CLI uses one bounded JSON stdin/stdout protocol and fails open", 
   }
 });
 
+test("workflow CLI exposes wait timing without lease credentials", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "csx-workflow-wait-cli-"));
+  const artifact = ".csx/goals/cli-wait.md";
+  try {
+    await mkdir(join(directory, ".csx", "goals"), { recursive: true });
+    await writeFile(join(directory, artifact), "R000");
+    const begin = JSON.parse((await run([cli, "workflow", "begin"], {
+      input: JSON.stringify({
+        version: 1,
+        projectRoot: directory,
+        workflow: "csx-start-goal",
+        phase: "implementation",
+        artifact
+      })
+    })).stdout);
+    const opened = await run([cli, "workflow", "wait-open"], {
+      input: JSON.stringify({ version: 1, projectRoot: directory, token: begin.token })
+    });
+    assert.equal(opened.code, 0);
+    assert.equal(opened.stderr, "");
+    const result = JSON.parse(opened.stdout);
+    assert.deepEqual(Object.keys(result), [
+      "schema", "version", "ok", "operation", "code", "wait"
+    ]);
+    assert.equal(result.wait.status, "awaiting_leader");
+    assert.equal(result.wait.waitSeconds, 30);
+    assert.equal(opened.stdout.includes(begin.token), false);
+    assert.equal(opened.stdout.includes("instanceTokenSha256"), false);
+
+    const repeated = await run([cli, "workflow", "wait-open"], {
+      input: JSON.stringify({ version: 1, projectRoot: directory, token: begin.token })
+    });
+    assert.equal(repeated.stdout, "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"wait-open\",\"code\":\"lease_already_open\"}\n");
+
+    const stale = await run([cli, "workflow", "wait-close"], {
+      input: JSON.stringify({
+        version: 1,
+        projectRoot: directory,
+        token: "A".repeat(43)
+      })
+    });
+    assert.equal(stale.stdout, "{\"schema\":\"csx.workflow-result\",\"version\":1,\"ok\":false,\"operation\":\"wait-close\",\"code\":\"token_mismatch\"}\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("workflow CLI reports unsafe Git authority as a machine failure without state controls", async () => {
   const directory = await mkdtemp(join(tmpdir(), "csx-workflow-cli-unsafe-"));
   const artifact = ".csx/goals/unsafe.md";

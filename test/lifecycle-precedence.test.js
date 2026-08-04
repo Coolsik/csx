@@ -58,6 +58,21 @@ test("coexisting authorities emit only the project restore in either invocation 
   }
 });
 
+test("coexisting authorities let only the project Stop hook block an active wait lease", async () => {
+  const fixture = await precedenceFixture();
+  try {
+    await createInstallation("project", fixture.project);
+    await createInstallation("global", fixture.global);
+    await writeActiveWaitLease(fixture.project);
+    const project = await runStop(fixture.projectHook, "project", fixture.project, fixture.project);
+    const global = await runStop(fixture.globalHook, "global", fixture.global, fixture.project);
+    assert.equal(JSON.parse(project.stdout).decision, "block");
+    assert.equal(global.stdout, "");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("a valid project authority suppresses global restore when project state is absent or invalid", async () => {
   const fixture = await precedenceFixture();
   try {
@@ -151,7 +166,7 @@ test("generated lifecycle commands carry identical exact authority on POSIX and 
       ["global", global, global, join(global, "hooks", "csx-hook.mjs")],
     ]) {
       const config = await readFile(join(configRoot, "config.toml"), "utf8");
-      for (const operation of ["session-start", "subagent-stop"]) {
+      for (const operation of ["session-start", "subagent-stop", "stop"]) {
         const posix = `node '${hook}' ${operation} --authority-scope ${scope} --authority-root '${root}'`;
         const windows = `node \\"${hook}\\" ${operation} --authority-scope ${scope} --authority-root \\"${root}\\"`;
         assert.equal(config.includes(posix), true);
@@ -218,6 +233,22 @@ async function writeActiveState(root) {
   }))}\n`);
 }
 
+async function writeActiveWaitLease(root) {
+  const now = new Date();
+  await writeFile(join(root, ".csx", "root-wait-lease-v1.json"), `${JSON.stringify({
+    schema: "csx.root-wait-lease",
+    version: 1,
+    status: "awaiting_leader",
+    workflow: "csx-start-goal",
+    instanceTokenSha256: createHash("sha256").update("A".repeat(43)).digest("hex"),
+    waitIndex: 0,
+    waitSeconds: 30,
+    openedAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 90_000).toISOString(),
+  })}\n`);
+}
+
 async function createInstallation(scope, root) {
   const layout = installationLayout(scope, root);
   await mkdir(dirname(layout.hook), { recursive: true });
@@ -247,10 +278,26 @@ function installationLayout(scope, root) {
 }
 
 function runSession(hook, scope, authorityRoot, cwd) {
+  return runLifecycle(hook, "session-start", scope, authorityRoot, cwd, {
+    hook_event_name: "SessionStart",
+    source: "resume",
+    cwd,
+  });
+}
+
+function runStop(hook, scope, authorityRoot, cwd) {
+  return runLifecycle(hook, "stop", scope, authorityRoot, cwd, {
+    hook_event_name: "Stop",
+    cwd,
+    stop_hook_active: true,
+  });
+}
+
+function runLifecycle(hook, operation, scope, authorityRoot, cwd, payload) {
   return new Promise((resolveRun) => {
     const child = execFile(process.execPath, [
       hook,
-      "session-start",
+      operation,
       "--authority-scope",
       scope,
       "--authority-root",
@@ -258,10 +305,6 @@ function runSession(hook, scope, authorityRoot, cwd) {
     ], { cwd, encoding: "utf8" }, (error, stdout) => {
       resolveRun({ code: error?.code ?? 0, stdout });
     });
-    child.stdin.end(JSON.stringify({
-      hook_event_name: "SessionStart",
-      source: "resume",
-      cwd,
-    }));
+    child.stdin.end(JSON.stringify(payload));
   });
 }

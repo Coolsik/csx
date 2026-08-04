@@ -22,6 +22,30 @@ const SKILL_HINTS = {
 const execFileAsync = promisify(execFile);
 const STATE_PATH = ".csx/workflow-state-v1.json";
 const STATE_LIMIT = 65_536;
+const WAIT_LEASE_PATH = ".csx/root-wait-lease-v1.json";
+const WAIT_LEASE_LIMIT = 4_096;
+const WAIT_LEASE_GRACE_SECONDS = 60;
+const WAIT_SCHEDULE_SECONDS = [30, 45, 75, 120, 180];
+const WAIT_LEASE_KEYS = [
+  "expiresAt",
+  "instanceTokenSha256",
+  "openedAt",
+  "schema",
+  "status",
+  "updatedAt",
+  "version",
+  "waitIndex",
+  "waitSeconds",
+  "workflow",
+].sort();
+const ROOT_BOUNDARY_PHASES = new Set([
+  "root_handoff_ready",
+  "root_decision_required",
+  "root_blocked",
+  "root_rotation_required",
+]);
+const STOP_WAIT_REASON = "Inspect the Leader result and active workflow state, then run `csx workflow wait-next` and call `wait_agent` for the returned interval.";
+const STOP_BOUNDARY_REASON = "Inspect and validate the Leader result against the active workflow state, run `csx workflow wait-close`, then continue with the normal handoff, user decision, or Leader replacement.";
 const ARTIFACT_LIMIT = 1_048_576;
 const RECEIPT_LIMIT = 65_536;
 const CONFIG_LIMIT = 1_048_576;
@@ -85,6 +109,8 @@ async function main() {
     await runSessionStart(process.stdin, process.stdout, authority);
   } else if (authority.operation === "subagent-stop") {
     await runSubagentStop(process.stdin, authority);
+  } else if (authority.operation === "stop") {
+    await runStop(process.stdin, process.stdout, authority);
   }
 }
 
@@ -117,7 +143,7 @@ async function runSessionStart(stdin, stdout, authority) {
 
 function parseAuthority(argv) {
   if (argv.length !== 5 ||
-      !["session-start", "subagent-stop"].includes(argv[0]) ||
+      !["session-start", "subagent-stop", "stop"].includes(argv[0]) ||
       argv[1] !== "--authority-scope" ||
       !["project", "global"].includes(argv[2]) ||
       argv[3] !== "--authority-root" ||
@@ -130,6 +156,76 @@ function parseAuthority(argv) {
     scope: argv[2],
     root: argv[4],
   };
+}
+
+async function runStop(stdin, stdout, authority) {
+  try {
+    const payload = parsePayload(await readAll(stdin));
+    if (!payload || payload.hook_event_name !== "Stop" || typeof payload.cwd !== "string") return;
+
+    const root = await resolveProjectRoot(payload.cwd, authority.scope === "global");
+    if (root === null) return;
+    if (authority.scope === "project") {
+      if (root !== authority.root) return;
+    } else {
+      const projectInstallation = await inspectInstallation("project", root);
+      if (projectInstallation !== "absent") return;
+    }
+
+    const state = await readActiveState(root);
+    if (state === null || !await artifactIsCurrent(root, state)) return;
+    const lease = await readActiveWaitLease(root, Date.now());
+    if (lease === null ||
+        lease.workflow !== state.workflow ||
+        lease.instanceTokenSha256 !== createHash("sha256").update(state.instanceToken).digest("hex")) {
+      return;
+    }
+    const reason = ROOT_BOUNDARY_PHASES.has(state.phase) ? STOP_BOUNDARY_REASON : STOP_WAIT_REASON;
+    stdout.write(`${JSON.stringify({ decision: "block", reason })}\n`);
+  } catch {
+    // Root waiting is best-effort and must fail open on every unsafe or invalid input.
+  }
+}
+
+async function readActiveWaitLease(root, now) {
+  const content = await readBoundedNoFollowFile(resolve(root, WAIT_LEASE_PATH), WAIT_LEASE_LIMIT);
+  if (content === null) return null;
+  let lease;
+  try {
+    lease = JSON.parse(content.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!validWaitLease(lease)) return null;
+  if (Date.parse(lease.openedAt) > now ||
+      Date.parse(lease.updatedAt) > now ||
+      now >= Date.parse(lease.expiresAt)) {
+    return null;
+  }
+  return lease;
+}
+
+function validWaitLease(lease) {
+  if (!isObject(lease) ||
+      lease.schema !== "csx.root-wait-lease" ||
+      lease.version !== 1 ||
+      lease.status !== "awaiting_leader" ||
+      !WORKFLOW_ARTIFACT_PREFIX.has(lease.workflow) ||
+      !sameKeys(lease, WAIT_LEASE_KEYS)) {
+    return false;
+  }
+  return Number.isInteger(lease.waitIndex) &&
+    lease.waitIndex >= 0 &&
+    lease.waitIndex < WAIT_SCHEDULE_SECONDS.length &&
+    lease.waitSeconds === WAIT_SCHEDULE_SECONDS[lease.waitIndex] &&
+    typeof lease.instanceTokenSha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(lease.instanceTokenSha256) &&
+    validTimestamp(lease.openedAt) &&
+    validTimestamp(lease.updatedAt) &&
+    validTimestamp(lease.expiresAt) &&
+    Date.parse(lease.openedAt) <= Date.parse(lease.updatedAt) &&
+    Date.parse(lease.expiresAt) === Date.parse(lease.updatedAt) +
+      (lease.waitSeconds + WAIT_LEASE_GRACE_SECONDS) * 1_000;
 }
 
 async function runUserPromptSubmitHook(stdin, stdout) {

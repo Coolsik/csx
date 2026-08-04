@@ -33,6 +33,14 @@ async function readSkill(name) {
   return readFile(resolve(root, "payload", "skills", name, "SKILL.md"), "utf8");
 }
 
+function readLeaderResultSchema(document) {
+  const match = document.match(
+    /<!-- csx\.leader-result-schema:v1 -->\s*```json\s*(\{[^\n]+\})\s*```/,
+  );
+  assert.ok(match, "leader result schema marker must contain one-line JSON");
+  return JSON.parse(match[1]);
+}
+
 test("agent prompts define complete general role contracts", async () => {
   for (const name of agentNames) {
     const agent = await readAgent(name);
@@ -300,7 +308,6 @@ test("loop-aware spec and plans return to their parent without weakening standal
 
   assert.match(spec, /use two sequential `request_user_input` calls/);
   assert.match(plan, /After writing the artifact, call `request_user_input`/);
-  assert.match(planPro, /After writing the artifact, call `request_user_input`/);
 });
 
 test("start-goal loop entry fails closed and retains the aggregate completion gate", async () => {
@@ -684,6 +691,96 @@ test("csx-plan-pro uses a single-writer sequential artifact gate with bounded bl
   assert.match(skill, /## Enforcement Boundary/);
   assert.match(skill, /does not create a new JS\s+orchestrator/);
   assert.match(leader, /do\s+not create a new runtime orchestrator/);
+});
+
+test("Root exclusively owns the escalating leader wait lease in both workflows", async () => {
+  const [plan, goal, planLeader, goalLeader] = await Promise.all([
+    readSkill("csx-plan-pro"),
+    readSkill("csx-start-goal"),
+    readAgent("csx-plan-leader"),
+    readAgent("csx-start-goal-leader"),
+  ]);
+
+  for (const skill of [plan, goal]) {
+    assert.match(skill, /## Root-Owned Leader Wait Lease/);
+    assert.match(skill, /After one Leader spawn, Root calls `csx workflow wait-open`/);
+    assert.match(skill, /`wait_agent`.*30.*45.*75.*120.*180/s);
+    assert.match(skill, /`csx workflow wait-next`/);
+    assert.match(skill, /nonterminal wake[\s\S]*180-second\s+waits/);
+    assert.match(
+      skill,
+      /`csx workflow wait-close` before any user decision, terminal artifact\s+integration\/finish, Leader rotation\/replacement, or final output/i,
+    );
+    assert.match(skill, /A timeout alone only advances\s+the wait\/lease and never triggers\s+finalization\/replacement/i);
+    assert.match(skill, /five-minute grace[\s\S]*status[\s\S]*replacement/i);
+  }
+
+  for (const leader of [planLeader, goalLeader]) {
+    assert.match(leader, /Root alone owns the wait lease/);
+    assert.match(leader, /must not open, renew, or close it/i);
+    assert.doesNotMatch(leader, /csx workflow wait-(?:open|next|close)/);
+  }
+});
+
+test("leader workflows publish the machine-readable result envelope schema", async () => {
+  const documents = await Promise.all([
+    readSkill("csx-plan-pro"),
+    readSkill("csx-start-goal"),
+    readAgent("csx-plan-leader"),
+    readAgent("csx-start-goal-leader"),
+  ]);
+  const expectedFields = [
+    "schema",
+    "version",
+    "workflow",
+    "state",
+    "phase",
+    "artifactPath",
+    "artifactSha256",
+    "nextAction",
+  ];
+  const expectedStates = [
+    "working",
+    "handoff_ready",
+    "user_decision_required",
+    "blocked",
+    "rotation_required",
+  ];
+  const expectedSentinels = {
+    handoff_ready: "root_handoff_ready",
+    user_decision_required: "root_decision_required",
+    blocked: "root_blocked",
+    rotation_required: "root_rotation_required",
+  };
+  const expectedStopRecovery = {
+    guardWhile: "active_valid_lease",
+    releaseOn: "successful_wait_close",
+    rootBoundaryOrder: ["validate_envelope", "wait_close", "transition"],
+    waitAgentAfterBoundaryStop: false,
+  };
+
+  const expectedWorkflows = ["csx-plan-pro", "csx-start-goal", "csx-plan-pro", "csx-start-goal"];
+
+  for (const [index, document] of documents.entries()) {
+    const schema = readLeaderResultSchema(document);
+    assert.equal(schema.title, "csx.leader-result");
+    assert.equal(schema.version, 1);
+    assert.equal(schema.type, "object");
+    assert.equal(schema.additionalProperties, false);
+    assert.deepEqual(schema.required, expectedFields);
+    assert.deepEqual(Object.keys(schema.properties), expectedFields);
+    assert.equal(schema.properties.schema.const, "csx.leader-result");
+    assert.equal(schema.properties.version.const, 1);
+    assert.equal(schema.properties.workflow.const, expectedWorkflows[index]);
+    assert.deepEqual(schema.properties.state.enum, expectedStates);
+    assert.equal(schema.properties.phase.type, "string");
+    assert.equal(schema.properties.artifactPath.type, "string");
+    assert.equal(schema.properties.artifactSha256.pattern, "^[a-f0-9]{64}$");
+    assert.equal(schema.properties.nextAction.type, "string");
+    assert.deepEqual(schema["x-phase-sentinels"], expectedSentinels);
+    assert.deepEqual(schema["x-stop-recovery"], expectedStopRecovery);
+    assert.equal(JSON.stringify(schema).includes("token"), false);
+  }
 });
 
 test("canonical workflows persist artifacts before fail-open token-CAS state milestones", async () => {

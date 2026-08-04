@@ -68,6 +68,61 @@ Apply this policy to every direct subagent spawn or resume in this skill.
 - This skill monitors only its direct subagent calls. A child skill monitors the agents it calls. Availability replacement does not consume or relax normal revision, review, or rework limits.
 - Use the environment's existing agent controls. Do not implement a custom runner, background service, or hard-kill timer for this policy.
 
+## Root-Owned Leader Wait Lease
+
+After one Leader spawn, Root calls `csx workflow wait-open` and retains the returned wait lease
+only in the Root thread. Root calls `wait_agent` for the returned 30-second wait, then advances
+the same lease through `csx workflow wait-next` and calls `wait_agent` for 45, 75, 120, and 180
+seconds. For every nonterminal wake, Root uses `csx workflow wait-next` and keeps 180-second
+waits thereafter; the cadence is 30, 45, 75, 120, 180, 180, ... and never resets merely because
+the Leader reported progress.
+
+Root calls `csx workflow wait-close` before any user decision, terminal artifact
+integration/finish, Leader rotation/replacement, or final output. A timeout alone only advances
+the wait/lease and never triggers finalization/replacement. This lease cadence preserves the
+existing five-minute grace, activity-aware status check, and single non-overlapping replacement
+policy; Root still applies those liveness rules from observable activity rather than from a wait
+timeout alone. The Start-Goal Leader does not open, renew, or close Root's lease.
+
+## Root-Leader Result Protocol
+
+The existing canonical workflow-state schema remains version 1. The following machine-readable
+schema defines the complete first-line result envelope; it is not a new persistent state schema.
+
+<!-- csx.leader-result-schema:v1 -->
+```json
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"csx.leader-result","version":1,"type":"object","additionalProperties":false,"required":["schema","version","workflow","state","phase","artifactPath","artifactSha256","nextAction"],"properties":{"schema":{"const":"csx.leader-result"},"version":{"const":1},"workflow":{"const":"csx-start-goal"},"state":{"enum":["working","handoff_ready","user_decision_required","blocked","rotation_required"]},"phase":{"type":"string","minLength":1},"artifactPath":{"type":"string","minLength":1},"artifactSha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"nextAction":{"type":"string","minLength":1}},"x-phase-sentinels":{"handoff_ready":"root_handoff_ready","user_decision_required":"root_decision_required","blocked":"root_blocked","rotation_required":"root_rotation_required"},"x-stop-recovery":{"guardWhile":"active_valid_lease","releaseOn":"successful_wait_close","rootBoundaryOrder":["validate_envelope","wait_close","transition"],"waitAgentAfterBoundaryStop":false}}
+```
+
+A normal domain phase means the Start-Goal Leader is still working and therefore uses state
+`working`. Reserve `root_handoff_ready`, `root_decision_required`, `root_blocked`, and
+`root_rotation_required` exclusively for the corresponding Root boundaries in the schema. Before
+every progress or boundary result, the Leader persists and verifies the current goal artifact or
+bounded Decision Packet and checkpoints its exact phase and artifact. At a Root boundary it
+checkpoints the reserved sentinel, then emits exactly one JSON object conforming to the schema as
+the first line of its response. The envelope never contains or reveals the workflow token.
+
+Root accepts a wake only after validating the envelope and matching its phase, repository-relative
+artifact path, and SHA-256 digest against the persisted checkpoint. Malformed JSON, an unknown or
+inconsistent state/phase pair, a missing artifact, or a path/digest mismatch becomes
+`protocol_unavailable`: Root closes the wait lease and does not continue waiting. Root calls
+`csx workflow wait-next` only after a valid `working` wake.
+
+An active valid wait lease remains the Stop recovery guard until `csx workflow wait-close`
+succeeds; a reserved `root_*` phase never bypasses that guard. When Stop continuation wakes at a
+Root boundary, Root inspects and strictly validates the matching Leader envelope, then calls
+`csx workflow wait-close` without calling `wait_agent` again. Only a successful close releases the
+guard and permits workflow finish, `request_user_input`, Leader replacement, or terminal output.
+If close does not succeed, keep the guard and do not perform the transition.
+
+For `handoff_ready`, Root closes the wait lease, verifies the completed goal artifact and digest,
+calls `csx workflow finish`, and only then performs aggregate completion or final output. For
+`user_decision_required`, Root closes the lease and calls `request_user_input`; the workflow stays
+active. Root persists the answer in the decision artifact, resumes the Leader with its path and
+digest, and opens a new wait lease for that resumed Leader. For `blocked`, `rotation_required`, or
+`protocol_unavailable`, Root closes the lease before terminal handling, replacing the Leader, or
+producing output. A timeout alone never selects any terminal state or replacement.
+
 ## Entry Gate
 
 1. Confirm current-turn execution authority through exactly one of these parallel branches.

@@ -57,6 +57,144 @@ test("a copied hook restores valid active workflows for every SessionStart sourc
   }
 });
 
+test("a copied Stop hook repeatedly blocks an ordinary active bound Root wait lease without mutation", async () => {
+  const fixture = await lifecycleFixture();
+  try {
+    await writeWaitLease(fixture);
+    const stateBefore = await readFile(fixture.statePath);
+    const leaseBefore = await readFile(fixture.leasePath);
+    for (const stop_hook_active of [false, true]) {
+      const result = await runLifecycleHook(fixture, "stop", {
+        hook_event_name: "Stop",
+        cwd: fixture.root,
+        stop_hook_active,
+      });
+      assert.equal(result.code, 0);
+      const output = JSON.parse(result.stdout);
+      assert.deepEqual(Object.keys(output).sort(), ["decision", "reason"]);
+      assert.equal(output.decision, "block");
+      assert.equal(typeof output.reason, "string");
+      assert.equal(result.stdout.includes(fixture.state().instanceToken), false);
+      assert.equal(result.stdout.includes(sha256(fixture.state().instanceToken)), false);
+      assert.equal(result.stdout.includes("PRIVATE ARTIFACT CONTENT"), false);
+    }
+    assert.deepEqual(await readFile(fixture.statePath), stateBefore);
+    assert.deepEqual(await readFile(fixture.leasePath), leaseBefore);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("Stop blocks Root-boundary phases with a distinct fixed reason", async (t) => {
+  const phaseCases = [
+    "root_handoff_ready",
+    "root_decision_required",
+    "root_blocked",
+    "root_rotation_required",
+  ];
+  for (const phase of phaseCases) {
+    await t.test(phase, async () => {
+      const fixture = await lifecycleFixture();
+      try {
+        await writeState(fixture, { phase });
+        await writeWaitLease(fixture);
+        const result = await runLifecycleHook(fixture, "stop", {
+          hook_event_name: "Stop",
+          cwd: fixture.root,
+          stop_hook_active: true,
+        });
+        assert.equal(result.code, 0);
+        const output = JSON.parse(result.stdout);
+        assert.deepEqual(Object.keys(output).sort(), ["decision", "reason"]);
+        assert.equal(output.decision, "block");
+        assert.equal(typeof output.reason, "string");
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  await t.test("boundary reason differs from ordinary wait reason", async () => {
+    const fixture = await lifecycleFixture();
+    try {
+      await writeWaitLease(fixture);
+      const ordinary = JSON.parse((await runLifecycleHook(fixture, "stop", {
+        hook_event_name: "Stop",
+        cwd: fixture.root,
+        stop_hook_active: true,
+      })).stdout);
+      await writeState(fixture, { phase: "root_handoff_ready" });
+      const boundary = JSON.parse((await runLifecycleHook(fixture, "stop", {
+        hook_event_name: "Stop",
+        cwd: fixture.root,
+        stop_hook_active: true,
+      })).stdout);
+      assert.equal(boundary.decision, "block");
+      assert.notEqual(boundary.reason, ordinary.reason);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  for (const [name, arrange] of [
+    ["missing lease", async (fixture) => {}],
+    ["malformed lease", async (fixture) => writeFile(fixture.leasePath, "{")],
+    ["terminal state", async (fixture) => {
+      await writeWaitLease(fixture);
+      await writeState(fixture, {
+        status: "terminal",
+        finishedAt: new Date().toISOString(),
+        terminalOutcome: "complete",
+      });
+    }],
+    ["mismatched lease", async (fixture) => writeWaitLease(fixture, {
+      instanceTokenSha256: "0".repeat(64),
+    })],
+    ["expired lease", async (fixture) => writeWaitLease(fixture, {
+      updatedAt: "2020-01-01T00:00:00.000Z",
+      expiresAt: "2020-01-01T00:01:30.000Z",
+    })],
+    ["future lease timestamp", async (fixture) => writeWaitLease(fixture, {
+      openedAt: "2999-01-01T00:00:00.000Z",
+      updatedAt: "2999-01-01T00:00:00.000Z",
+      expiresAt: "2999-01-01T00:01:30.000Z",
+    })],
+    ["missing artifact", async (fixture) => {
+      await writeWaitLease(fixture);
+      await rm(fixture.artifactPath);
+    }],
+    ["drifted artifact", async (fixture) => {
+      await writeWaitLease(fixture);
+      await writeFile(fixture.artifactPath, "changed artifact");
+    }],
+    ["symlink artifact", async (fixture) => {
+      await writeWaitLease(fixture);
+      const target = join(fixture.root, "stop-artifact-target.md");
+      await writeFile(target, "PRIVATE ARTIFACT CONTENT");
+      await rm(fixture.artifactPath);
+      await symlink(target, fixture.artifactPath);
+    }],
+    ["oversize artifact", async (fixture) => {
+      await writeWaitLease(fixture);
+      await writeFile(fixture.artifactPath, Buffer.alloc(ARTIFACT_LIMIT + 1, "x"));
+    }],
+  ]) {
+    await t.test(name, async () => {
+      const fixture = await lifecycleFixture();
+      try {
+        await arrange(fixture);
+        assert.deepEqual(await runLifecycleHook(fixture, "stop", {
+          hook_event_name: "Stop",
+          cwd: fixture.root,
+          stop_hook_active: false,
+        }), { code: 0, stdout: "" });
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+});
+
 test("copied hook follows the shared exact-key workflow state schema corpus", async (t) => {
   for (const schemaCase of WORKFLOW_STATE_SCHEMA_CASES) {
     await t.test(schemaCase.name, async () => {
@@ -231,6 +369,7 @@ async function lifecycleFixture({ receipt = true } = {}) {
     hook,
     artifactPath,
     statePath,
+    leasePath: join(root, ".csx", "root-wait-lease-v1.json"),
     state,
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
@@ -241,10 +380,14 @@ async function writeState(fixture, patch) {
 }
 
 function runHook(fixture, payload) {
+  return runLifecycleHook(fixture, "session-start", payload);
+}
+
+function runLifecycleHook(fixture, operation, payload) {
   return new Promise((resolveRun) => {
     const child = execFile(process.execPath, [
       fixture.hook,
-      "session-start",
+      operation,
       "--authority-scope",
       "project",
       "--authority-root",
@@ -257,6 +400,25 @@ function runHook(fixture, payload) {
     });
     child.stdin.end(JSON.stringify(payload));
   });
+}
+
+async function writeWaitLease(fixture, patch = {}) {
+  const now = new Date();
+  const updatedAt = now.toISOString();
+  const lease = {
+    schema: "csx.root-wait-lease",
+    version: 1,
+    status: "awaiting_leader",
+    workflow: fixture.state().workflow,
+    instanceTokenSha256: sha256(fixture.state().instanceToken),
+    waitIndex: 1,
+    waitSeconds: 45,
+    openedAt: updatedAt,
+    updatedAt,
+    expiresAt: new Date(now.getTime() + 105_000).toISOString(),
+    ...patch,
+  };
+  await writeFile(fixture.leasePath, `${JSON.stringify(lease)}\n`);
 }
 
 function sha256(content) {
